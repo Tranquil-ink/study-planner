@@ -1,81 +1,79 @@
 # 学习日程规划器
 
-目前仅完成 **阶段 0：工程骨架**。可以在日历、任务池、周期计划、复盘、数据设置之间切换，每页明确标注“尚未实现”。这还不是可记录学习数据的完整工具。
+阶段 1 的登录、任务池、Supabase 数据层和完整备份代码已实现；**阶段 1 尚未通过完整验收**。项目所有者确认 Supabase 项目尚未创建，因而真实云端迁移、权限/读写集成及安卓实机验收待完成。缺配置时应用显示说明，不会以本地数据冒充云端保存。
 
-完整产品范围、默认规则与分阶段验收标准见 [PROJECT_SPEC.md](PROJECT_SPEC.md)，开发进度见 [docs/PROGRESS.md](docs/PROGRESS.md)，协作约定见 [AGENTS.md](AGENTS.md)。本次保留原规范文件不变。
+规范：[PROJECT_SPEC.md](PROJECT_SPEC.md) v2.0。进度：[docs/PROGRESS.md](docs/PROGRESS.md)。检查：[docs/CHECKS.md](docs/CHECKS.md)。协作规则：[AGENTS.md](AGENTS.md)。本分支基于 `605ea447`，包含已合并阶段 0（PR #1）与 Supabase 新规范（PR #2）。
 
-## 环境与启动
+## 启动
 
-使用 **Node.js 24.19.0 LTS（Krypton）与 npm 11.9.0**。Node 版本固定在 `.nvmrc`，`package.json` 和 `.npmrc` 会检查版本；只使用 npm。直接依赖固定版本，间接依赖由 `package-lock.json` 锁定。
-
-已安装 nvm 的 macOS／Linux 用户可在仓库目录执行：
+固定 Node.js **24.19.0 LTS**、npm **11.9.0**；不混用包管理器，不随意更新依赖。
 
 ```bash
 nvm install
 nvm use
-node --version
-npm --version
 npm ci
+cp .env.example .env.local
+# 按 docs/SUPABASE.md 创建项目、应用迁移、创建账号并填写公开配置
 npm run dev
 ```
 
-Windows 或不使用 nvm 时，安装相同版本的 Node.js，确认 Node 和 npm 版本，再执行 `npm ci` 与 `npm run dev`。首次生成工程时使用 `npm install` 创建 lockfile；拉取本仓库后统一使用 `npm ci`。
+Windows 无 nvm 时安装相同版本 Node/npm，复制 `.env.example` 为 `.env.local` 后执行 npm 命令。打开 Vite 输出的网址（通常 localhost:5173）；手机不能使用电脑的 localhost，双设备需配置可达 HTTPS 验收网址。修改 `.env.local` 后重启服务。
 
-打开终端打印的本地地址，通常是 `http://localhost:5173`。端口占用时以 Vite 实际输出为准。按 Ctrl+C 停止服务。运行本阶段不需要环境变量、密钥、后端或浏览器测试依赖。
+只允许 `VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY` 为前端配置。后者可使用 publishable 或旧 anon key，绝不能使用 service_role/secret key。凭据与个人备份不提交 Git。
 
-## 可用命令
+数据库安装、关闭注册、账号恢复、网络允许列表与真实集成测试配置详见 [docs/SUPABASE.md](docs/SUPABASE.md)。本阶段没有部署网站，正式 GitHub Pages 配置属于阶段 7。
+
+## 本阶段可用功能
+
+- 邮箱密码登录、SDK 会话恢复/续期、退出；会话验证前不显示个人数据。
+- 分类新增、改名、颜色与归档；长期任务新增、修改、归档/取消归档、查看归档内容。保留原五个中文入口、hash 刷新/前进后退与键盘导航。
+- 任务包含分类、单位、可选总量、初始已完成量、位置文字与备注。初始 8 节/总量 40/位置 `2.1.1` 分别保存，不把章节当小数。
+- 真实 `@supabase/supabase-js` 访问云端；所有写入经过受控事务，按账号 RLS 隔离，版本冲突拒绝覆盖，稳定请求 ID 支持确认/幂等重试。
+- 获取最新数据、最近成功获取时间、保存中/已保存/失败/结果待确认。切页保留任务表单；刷新取数不自动提高旧表单版本，核对后显式重新应用。
+- 云端一致快照导出、JSON 预检、数量摘要与确认后原子完整替换；约定 v0 本地 JSON 迁移入口。归档实体和设置也完整备份。
+- 手机单列编辑，主要按钮/输入至少 44px，清楚的标签与错误提示。
+
+学习业务数据只在云端持久保存，浏览器仅有 SDK 会话和内存草稿。没有离线修改、补传、自动轮询或实时推送。另一设备需主动刷新或重新打开。
+
+## 检查命令
 
 | 命令 | 用途 |
 | --- | --- |
-| `npm run dev` | 启动开发服务，修改源码后自动更新 |
-| `npm run typecheck` | 检查应用与 Vite 配置的 TypeScript 类型 |
-| `npm run lint` | ESLint 检查，警告也视为失败 |
-| `npm run build` | 先检查类型，再构建静态文件到 `dist/` |
-| `npm run preview` | 在本地预览已构建的 `dist/`，通常为 `http://localhost:4173` |
+| `npm run dev` | 开发服务 |
+| `npm run typecheck` | 应用、配置、测试和集成脚本类型检查 |
+| `npm run lint` | 代码检查，警告视为失败 |
+| `npm run test -- --run` | 数量/备份、客户端失败、迁移在本地 PostgreSQL 引擎上的测试 |
+| `npm run test:integration` | 指定真实 Supabase 隔离项目，检查 Auth、RLS、并发、幂等与恢复；缺配置退出码 2 |
+| `npm run check:browser` | 可重跑的浏览器风险检查：模拟 Auth/HTTP + 本地 PostgreSQL，不替代云端验收 |
+| `npm run build` | 检查类型并构建到 dist/ |
+| `npm run preview` | 预览已构建的静态网页，通常 localhost:4173 |
 
-`preview` 前先执行 `npm run build`，不要直接双击 `dist/index.html`。本阶段没有业务计算，不添加占位测试或虚假的 `test` 成功脚本；后续业务阶段引入 Vitest，阶段 7 再集成 Playwright 流程测试与浏览器安装说明。
+先 build 再 preview，不直接双击 HTML。本地测试中的 PGlite 仅为开发依赖，不进入生产包，不是应用存储方案。真实集成与安卓手动验收必须另外执行。阶段 7 再汇总正式 E2E/CI。本次为阶段 1 数据风险加入独立浏览器检查，运行前安装浏览器：
 
-## 本次实现
-
-- React + TypeScript strict + Vite 工程，普通 CSS，无额外路由或状态管理框架。
-- 中文侧栏导航、当前页面标记、标题与未实现提示；窄屏改为顶部导航。
-- 原生 hash 导航支持刷新与前进／后退，无 hash 或未知地址显示日历。
-- 键盘焦点样式、跳到主要内容入口和语义化主导航。
-- 无示例任务、假统计或伪保存。未接入 IndexedDB，也不会读写 localStorage；初始没有业务数据，不创建空数据库来冒充持久化。
-
-## 手动验收
-
-1. 执行 `npm ci`、`npm run dev`，打开服务地址；默认页面为“日历”，浏览器标签显示“日历 · 学习日程规划器”。
-2. 依次点击五个导航入口；当前项有边框和高亮，标题与说明对应页面，每页明确提示“尚未实现”。不应出现示例任务、数字统计或可保存的表单。
-3. 在任务池页面刷新，仍显示任务池；使用浏览器后退／前进，应切换到相应页面。访问 `#unknown` 时应显示日历。
-4. 用 Tab 遍历导航，焦点清晰；Enter 可切换。使用“跳到主要内容”应聚焦内容区，并保留当前页面。
-5. 将窗口缩窄到约 375px（可再测 320px），五个入口均可见、可操作，文字不被截断，页面不应横向溢出。
-6. 打开浏览器开发者工具，切换页面应没有运行错误。在新的浏览器配置／干净 origin 下检查存储，不应生成本应用的 IndexedDB 数据库或 localStorage 学习记录。不要为验收清除其他应用数据。
-7. 执行 `npm run typecheck`、`npm run lint`、`npm run build`；再运行 `npm run preview`，重复页面切换检查。
-
-## 代码位置与后续约束
-
-```text
-src/
-  App.tsx                       页面外壳和导航
-  navigation.ts                 页面描述，不是业务数据
-  useCurrentPage.ts             hash 导航订阅
-  components/FeaturePlaceholder.tsx  共用未实现提示
-  main.tsx                      React 入口
-  styles.css                    基础与响应式样式
-docs/
-  PROGRESS.md                   阶段清单和下一阶段入口
-  CHECKS.md                     本次真实检查结果
+```bash
+npx playwright install chromium
+npm run check:browser
 ```
 
-后续按需增加 `src/domain/`（纯业务计算）、`src/data/`（统一存储入口）和 `src/features/`（模块界面），不预先创建空业务实现。
+已有系统 Chromium 时可设置 `CHROMIUM_EXECUTABLE_PATH` 指向它（本次 Linux 用 `/usr/bin/chromium`）。脚本自行启动 5174 端口的 Vite，只在测试内拦截请求并使用虚构样例，不连接真实 Supabase；产物写到已忽略的 work/。环境与范围见 CHECKS。
 
-规范中的默认规则仍保留在 `PROJECT_SPEC.md` 第 2、7、8 节：周一为一周起点；日历日期采用 Asia/Shanghai；保存整数分钟；每天 10 个基础时段共 690 分钟且不可跨休息间隔合并；位置文字与数值进度分开；计划与实际分开；跳过周不自动分摊预算，部分周按天折算。本阶段尚无相关业务代码，不能把这些约定视为已实现。
+## 双设备快速验收
 
-## 检查与限制
+1. 按 Supabase 文档建好测试项目并配置同一 HTTPS 网页，手机与电脑登录同一个账号。
+2. 手机创建“物理 → 理论力学”，总量 40、初始 8、位置 `2.1.1`，等待云端确认；电脑获取最新数据应见同一内容。
+3. 电脑修改备注，手机获取最新数据应一致；归档后勾选显示归档仍可查看。清除一个设备的测试网站数据，重新登录仍能取回已确认记录。
+4. 两端同时打开旧表单，先保存者成功，后保存者提示冲突且保留输入；刷新后核对并明确重新应用。
+5. 导出完整 JSON，修改后恢复；预检展示两份数据的数量并要求确认替换。另一设备刷新见恢复结果，旧表单必须冲突。
+6. 断网取数不冒充空库，保存失败不显示成功；联网后确认原请求、幂等重试。执行真实集成脚本检查权限、响应丢失与回滚。
 
-实际执行的结果见 [docs/CHECKS.md](docs/CHECKS.md)。
+完整操作、网络/过期会话/恢复/迁移和实机记录表见 [docs/ACCEPTANCE_STAGE1.md](docs/ACCEPTANCE_STAGE1.md)。
 
-阶段 1～7 均未开始：没有任务增改、真实日历、时段合并、实际学习记录、周期预算、预测、持久化或备份恢复。未接后端、登录、AI API、统计跟踪或远程业务服务。尚未配置 GitHub Pages 发布、仓库子路径或离线缓存，不承诺离线重开可用。
+## 数据规则和限制
 
-下一阶段只有在收到明确任务后才开始，须基于包含本阶段成果的分支或合并结果继续。
+详细契约见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)。进度为最多 9 位整数、6 位小数的非负精确数量，超精度拒绝、不截断；初始量不能超过总量。备份 v1 用十进制字符串；v0 是明确约定的测试迁移格式，未得到真实旧 IndexedDB 样本，不支持猜测格式或跨 origin 直接读取。
+
+阶段 2～7 未实现：实际日历、合并拆分、WorkLog、周期预算、复盘与预测仍为占位入口。当前累计只等于初始量，无学习速度或实际投入。分类/任务采用归档，不提供硬删除。设置固定中国时区与日期格式。
+
+未知请求只保留在当前页内；关闭/刷新页面会丢失草稿和内存请求信息，重新打开后需获取云端并核对，不能盲目重复创建。备份导入上限 10 MiB，导出没有分页截断；超过此个人使用规模须先扩展恢复能力。恢复重建服务器审计时间但保留 UUID 和业务内容。
+
+当前缺真实 Supabase 项目、两个隔离测试身份及 HTTPS 验收网址；未验证真实安卓、Safari/Firefox 或自然 token 过期。没有邮件恢复链接回调界面，密码恢复按管理端说明进行。不得把这些待验收项标记为通过。

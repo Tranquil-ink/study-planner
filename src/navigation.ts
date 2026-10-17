@@ -31,7 +31,7 @@ export const pages = [
   {
     id: 'settings',
     label: '数据设置',
-    description: '管理保存在浏览器中的学习数据。',
+    description: '管理云端学习数据与完整 JSON 备份。',
     pendingTitle: '数据保存与备份尚未实现',
     pendingDescription: '浏览器内保存、完整备份导出和恢复将在后续阶段开放。当前版本不会读取或写入学习数据。',
   },
