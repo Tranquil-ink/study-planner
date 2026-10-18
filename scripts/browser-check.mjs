@@ -30,8 +30,9 @@ async function setup(width) {
   let mode='normal'
   await context.route('https://test.supabase.co/**',async route=>{
     const request=route.request(),url=new URL(request.url())
+    if(mode==='authOffline' && url.pathname.endsWith('/user')) return route.fulfill({status:503,json:{message:'test Auth service unreachable'}})
     if(mode==='badreceipt' && url.pathname.endsWith('/planner_receipt')) return route.fulfill({json:{requestId:'invalid',revision:1}})
-    if(mode==='offline' && url.pathname.startsWith('/rest')) return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'test network failure'})})
+    if((mode==='offline' || mode==='authOffline') && url.pathname.startsWith('/rest')) return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'test network failure'})})
     if(mode==='expired' && url.pathname.startsWith('/rest')) return route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({code:'PGRST301',message:'JWT expired'})})
     if(url.pathname.endsWith('/token')) return route.fulfill({json:{access_token:token,refresh_token:'fixture-refresh-token',token_type:'bearer',expires_in:3600,expires_at:Math.floor(Date.now()/1000)+3600,user}})
     if(url.pathname.endsWith('/user')) return route.fulfill({json:user})
@@ -62,6 +63,7 @@ async function saved(page) {await page.getByRole('status').filter({hasText:'已�
 try {
   const phone=await setup(360),desktop=await setup(1280)
   const p=phone.page,d=desktop.page
+  p.on('dialog',dialog=>dialog.accept())
   await p.getByRole('button',{name:'新增分类',exact:true}).click()
   await p.getByLabel('分类名称',{exact:true}).fill('浏览器虚构物理')
   await p.getByRole('button',{name:'保存到云端',exact:true}).click();await saved(p)
@@ -71,6 +73,35 @@ try {
   await p.getByLabel('初始已完成量',{exact:true}).fill('8')
   await p.getByLabel('初始位置文字',{exact:true}).fill('2.1.1')
   await p.getByRole('button',{name:'保存到云端',exact:true}).click();await saved(p)
+  // Background/foreground recovery makes the SDK emit SIGNED_IN again.
+  // Auth being unreachable must preserve this page's verified identity/draft.
+  await p.getByRole('button',{name:'编辑任务 / 归档',exact:true}).click()
+  await p.getByLabel('备注',{exact:true}).fill('切回前台时保留的草稿')
+  const fetchedBefore=await p.getByText(/^最近成功获取：/).innerText()
+  phone.mode('authOffline')
+  await p.evaluate(()=>window.dispatchEvent(new Event('visibilitychange')))
+  await p.getByRole('region',{name:'登录连接状态'}).waitFor()
+  assert.equal(await p.getByRole('button',{name:'登录',exact:true}).count(),0)
+  assert.equal(await p.getByLabel('备注',{exact:true}).inputValue(),'切回前台时保留的草稿')
+  await p.getByRole('heading',{name:'浏览器虚构理论力学',exact:true}).waitFor()
+  await p.getByRole('button',{name:'获取最新数据',exact:true}).click()
+  await p.getByRole('alert').filter({hasText:'获取失败'}).waitFor()
+  assert.equal(await p.getByText(/^最近成功获取：/).innerText(),fetchedBefore)
+  // A new page has no previously verified in-memory identity; never display
+  // private data from the SDK's cached session without server verification.
+  const cold=await phone.context.newPage()
+  await cold.goto('http://127.0.0.1:5174/#tasks')
+  await cold.getByRole('region',{name:'登录连接状态'}).waitFor()
+  assert.equal(await cold.getByRole('button',{name:'登录',exact:true}).count(),0)
+  assert.equal(await cold.getByRole('heading',{name:'浏览器虚构理论力学',exact:true}).count(),0)
+  phone.mode('normal')
+  await cold.getByRole('button',{name:'重试验证登录',exact:true}).click()
+  await cold.getByRole('heading',{name:'浏览器虚构理论力学',exact:true}).waitFor()
+  await cold.close()
+  await p.getByRole('button',{name:'重试验证登录',exact:true}).click()
+  await p.getByRole('region',{name:'登录连接状态'}).waitFor({state:'hidden'})
+  assert.equal(await p.getByLabel('备注',{exact:true}).inputValue(),'切回前台时保留的草稿')
+  await p.getByRole('button',{name:'取消编辑',exact:true}).click()
   await d.getByRole('button',{name:'获取最新数据',exact:true}).click()
   await d.getByRole('heading',{name:'浏览器虚构理论力学',exact:true}).waitFor()
   await d.getByRole('button',{name:'编辑任务 / 归档',exact:true}).click()
@@ -155,6 +186,17 @@ try {
   const storage=await p.evaluate(async()=>({databases:await indexedDB.databases(),keys:Object.keys(localStorage)}))
   assert.equal(storage.databases.length,0)
   assert.ok(storage.keys.every(key=>key.startsWith('sb-')))
+  // An unverified cross-tab identity change may invalidate A, never authorize B
+  // or leave A visible merely because the verification request is offline.
+  phone.mode('authOffline')
+  await p.evaluate(()=>{
+    const channel=new BroadcastChannel('sb-test-auth-token')
+    channel.postMessage({event:'SIGNED_IN',session:{user:{id:'10000000-0000-4000-8000-000000000002'}}})
+    channel.close()
+  })
+  await p.getByRole('region',{name:'登录连接状态'}).waitFor()
+  assert.equal(await p.getByRole('button',{name:'获取最新数据',exact:true}).count(),0)
+  assert.equal(await p.getByText('fixture@example.invalid',{exact:true}).count(),0)
   assert.deepEqual(errors,[])
-  console.log('PASS browser simulation: login, dual contexts, edit conflict/rebase, lost response retry, failed read, backup download/restore, archive, expiry/relogin, logout, 320/360/430/1280 layouts. Auth and HTTP are fixtures; DB executes migration on PGlite. NOT cloud or Android validation.')
+  console.log('PASS browser simulation: login, dual contexts, edit conflict/rebase, lost response retry, failed read, background Auth connection failure with retained draft, cold-load auth gating/reconnect and cross-account invalidation, backup download/restore, archive, expiry/relogin, logout, 320/360/430/1280 layouts. Auth and HTTP are fixtures; DB executes migration on PGlite. NOT cloud or Android validation.')
 } catch(e) { for(let i=0;i<allPages.length;i++) { await allPages[i].screenshot({path:`work/failure-${i}.png`,fullPage:true}); await fs.writeFile(`work/failure-${i}.txt`,await allPages[i].locator('body').innerText()) } throw e } finally {await browser.close();await db.close();server.kill()}

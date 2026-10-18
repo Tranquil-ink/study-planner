@@ -1,6 +1,6 @@
 # 学习日程规划器
 
-阶段 1 的登录、任务池、Supabase 数据层和完整备份代码已实现；**阶段 1 尚未通过完整验收**。项目所有者确认 Supabase 项目尚未创建，因而真实云端迁移、权限/读写集成及安卓实机验收待完成。缺配置时应用显示说明，不会以本地数据冒充云端保存。
+阶段 1 的登录、任务池、Supabase 数据层和完整备份代码已实现；**阶段 1 尚未通过完整验收**。2026-10-18 收到用户真实验收报告：云端迁移、集成脚本、双设备核心流程和主要安卓操作已报告通过；断网读取异常已补修，待重新部署补验，真实会话过期等专项仍未完成。缺配置时应用显示说明，不会以本地数据冒充云端保存。
 
 规范：[PROJECT_SPEC.md](PROJECT_SPEC.md) v2.0。进度：[docs/PROGRESS.md](docs/PROGRESS.md)。检查：[docs/CHECKS.md](docs/CHECKS.md)。协作规则：[AGENTS.md](AGENTS.md)。本分支基于 `605ea447`，包含已合并阶段 0（PR #1）与 Supabase 新规范（PR #2）。
 
@@ -21,7 +21,7 @@ Windows 无 nvm 时安装相同版本 Node/npm，复制 `.env.example` 为 `.env
 
 只允许 `VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY` 为前端配置。后者可使用 publishable 或旧 anon key，绝不能使用 service_role/secret key。凭据与个人备份不提交 Git。
 
-数据库安装、关闭注册、账号恢复、网络允许列表与真实集成测试配置详见 [docs/SUPABASE.md](docs/SUPABASE.md)。本阶段没有部署网站，正式 GitHub Pages 配置属于阶段 7。
+数据库安装、关闭注册、账号恢复、网络允许列表与真实集成测试配置详见 [docs/SUPABASE.md](docs/SUPABASE.md)。用户已建立 Cloudflare HTTPS 测试站点；正式 GitHub Pages 配置仍属于阶段 7。
 
 ## 本阶段可用功能
 
@@ -76,4 +76,6 @@ npm run check:browser
 
 未知请求只保留在当前页内；关闭/刷新页面会丢失草稿和内存请求信息，重新打开后需获取云端并核对，不能盲目重复创建。备份导入上限 10 MiB，导出没有分页截断；超过此个人使用规模须先扩展恢复能力。恢复重建服务器审计时间但保留 UUID 和业务内容。
 
-当前缺真实 Supabase 项目、两个隔离测试身份及 HTTPS 验收网址；未验证真实安卓、Safari/Firefox 或自然 token 过期。没有邮件恢复链接回调界面，密码恢复按管理端说明进行。不得把这些待验收项标记为通过。
+真实测试项目、HTTPS 网址及主要安卓操作已有用户报告；本 Codex 环境没有测试凭据，未独立重跑云端检查。自然 token 过期、全部无效备份和修复版断网读取回归仍待补验，Safari/Firefox 未验证。没有邮件恢复链接回调界面，密码恢复按管理端说明进行。不得把这些待验收项标记为通过。
+
+本次验收结果、证据边界及需要重新部署后的补验步骤见 [用户验收与补验记录](docs/OWNER_ACCEPTANCE_STAGE1.md)。修复仅涉及前端身份验证，不需要再次执行数据库建表迁移。
