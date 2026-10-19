@@ -85,3 +85,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 [hidden] { display: none !important; }
 .login-panel { max-width: 34rem; }
 @media (max-width: 480px) { .panel, .cloud-bar { padding: .9rem; } .actions > button { flex: 1 1 auto; } }
+
+/* Stage 2: week overflow stays inside this labelled region. */
+.calendar-toolbar { display: grid; gap: .8rem; }
+.calendar-toolbar label { max-width: 20rem; }
+button[aria-pressed=true] { color: #fff; background: #245d4c; }
+.calendar-scroll { overflow-x: auto; border: 1px solid #dce4df; border-radius: 10px; background: #fff; margin-bottom: 1rem; }
+.calendar-grid { display: grid; gap: 1px; background: #e0e6e1; }
+.calendar-grid.week { min-width: 880px; }
+.calendar-heading, .calendar-time { padding: .65rem; background: #f1f6f3; }
+.calendar-heading { font-size: .9rem; font-weight: 600; }
+.calendar-heading.is-today { background: #dceee3; }
+.calendar-time { font-variant-numeric: tabular-nums; }
+.calendar-time small { display: block; font-size: .75rem; }
+.calendar-slot { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: .2rem; text-align: left; min-height: 105px; border: 0; border-left: 5px solid transparent; border-radius: 0; background: #fff; padding: .65rem; overflow-wrap: anywhere; }
+.calendar-slot.occupied { background: #f8fbf9; border-left-color: #687f73; }
+.calendar-slot span, .calendar-slot small { font-size: .8rem; }
+.calendar-slot:disabled { opacity: 1; cursor: default; color: #52625b; }
+.calendar-break { padding: .55rem 1rem; background: #f7f0e3; color: #735d33; font-size: .85rem; }
+@media (min-width: 1600px) { .calendar-grid.week { min-width: 100%; } }

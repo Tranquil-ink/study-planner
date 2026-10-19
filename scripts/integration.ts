@@ -43,7 +43,7 @@ async function snapshot(c: SupabaseClient) {
 }
 const command = (type:string,value:unknown) => ({type,value})
 const write = (c:SupabaseClient, revision:number, cmd:unknown, requestId=randomUUID()) => c.rpc('planner_mutate',{p_request_id:requestId,p_expected_revision:revision,p_command:cmd})
-const tables = ['categories','tasks','settings','dataset_state','operation_receipts']
+const tables = ['categories','tasks','schedules','settings','dataset_state','operation_receipts']
 let cleanupReady = false
 let initial: Awaited<ReturnType<typeof snapshot>>
 try {
@@ -53,8 +53,8 @@ try {
   assert.notEqual(userA,userB)
   initial = await snapshot(phone)
   const initialB = await snapshot(other)
-  assert.equal(initial.categories.length+initial.tasks.length,0,'拒绝测试：A 账号非空')
-  assert.equal(initialB.categories.length+initialB.tasks.length,0,'拒绝测试：B 账号非空')
+  assert.equal(initial.categories.length+initial.tasks.length+initial.schedules.length,0,'拒绝测试：A 账号非空')
+  assert.equal(initialB.categories.length+initialB.tasks.length+initialB.schedules.length,0,'拒绝测试：B 账号非空')
   cleanupReady = true
   let revision = initial.revision
   const category = {id:randomUUID(),name:'虚构集成测试分类',color:'#32796b',archived:false}
@@ -103,10 +103,10 @@ try {
   assert.ok((await write(phone,revision,command('saveTask',task))).error)
   offline = false
   assert.deepEqual(await snapshot(phone),beforeFailure)
-  const broken = {categories:[],tasks:beforeFailure.tasks,settings:beforeFailure.settings}
+  const broken = {categories:[],tasks:beforeFailure.tasks,schedules:beforeFailure.schedules,settings:beforeFailure.settings}
   assert.ok((await write(phone,revision,command('restore',broken))).error)
   assert.deepEqual(await snapshot(phone),beforeFailure)
-  const restoreId = randomUUID(), restored = {categories:beforeFailure.categories,tasks:beforeFailure.tasks,settings:beforeFailure.settings}
+  const restoreId = randomUUID(), restored = {categories:beforeFailure.categories,tasks:beforeFailure.tasks,schedules:beforeFailure.schedules,settings:beforeFailure.settings}
   assert.equal((await write(phone,revision,command('restore',restored),restoreId)).error,null)
   assert.equal((await write(phone,revision,command('restore',restored),restoreId)).error,null)
   assert.equal((await write(desktop,revision,command('saveTask',task))).error?.message,'REVISION_CONFLICT'); revision++
@@ -115,6 +115,63 @@ try {
   assert.deepEqual(restoredSnapshot.tasks.map((t: Record<string,unknown>)=>({id:t.id,title:t.title,note:t.note})),beforeFailure.tasks.map((t:Record<string,unknown>)=>({id:t.id,title:t.title,note:t.note})))
   assert.equal((await snapshot(other)).tasks.length,0)
   console.log('通过：读取失败、提交前断网、恢复中途回滚、完整恢复重试、恢复后的旧表单拒绝。')
+  // Stage 2: real independent HTTP sessions contend under PostgreSQL's account lock.
+  const schedule = {id:randomUUID(),date:'2026-10-20',slotTemplateVersion:1,slotIds:[2],startMinute:540,endMinute:600,taskId:task.id,title:task.title,plannedRangeText:'2.1～2.3',note:'虚构日程'}
+  const firstScheduleId=randomUUID(),firstScheduleCommand=command('saveSchedule',schedule)
+  loseResponse=true
+  assert.ok((await write(phone,revision,firstScheduleCommand,firstScheduleId)).error)
+  assert.equal((await phone.rpc('planner_receipt',{p_request_id:firstScheduleId})).data?.revision,revision+1)
+  assert.equal((await write(phone,revision,firstScheduleCommand,firstScheduleId)).error,null);revision++
+  assert.equal((await snapshot(desktop)).schedules[0].plannedRangeText,'2.1～2.3')
+  assert.equal((await snapshot(desktop)).tasks[0].initialCompletedUnits,'8')
+  assert.equal((await write(desktop,revision++,command('saveSchedule',{...schedule,plannedRangeText:'2.2～2.4'}))).error,null)
+  assert.equal((await snapshot(phone)).schedules[0].plannedRangeText,'2.2～2.4')
+  assert.ok((await write(phone,revision,command('saveSchedule',{...schedule,id:randomUUID()}))).error,'数据库允许重复占用')
+  assert.equal((await snapshot(phone)).revision,revision)
+  const contenders=await Promise.all([phone,desktop].map((c,i)=>write(c,revision,command('saveSchedule',{...schedule,id:randomUUID(),slotIds:[9],startMinute:1110,endMinute:1215,taskId:null,title:`临时报告${i}`}))))
+  assert.equal(contenders.filter(r=>!r.error).length,1)
+  assert.equal(contenders.find(r=>r.error)?.error?.message,'REVISION_CONFLICT');revision++
+  const concurrentSchedules=(await snapshot(phone)).schedules
+  assert.equal(concurrentSchedules.length,2)
+  assert.equal(concurrentSchedules.find((s:Record<string,unknown>)=>s.taskId===null).endMinute-concurrentSchedules.find((s:Record<string,unknown>)=>s.taskId===null).startMinute,105)
+  assert.ok((await write(other,initialB.revision,command('saveSchedule',schedule))).error,'跨账号任务引用未拒绝')
+  assert.ok((await write(other,initialB.revision,command('saveSchedule',{...schedule,owner_id:userA}))).error)
+  for(const patch of [{date:'2026-02-30'},{startMinute:541},{slotIds:[2,3]},{slotTemplateVersion:2},{taskId:randomUUID()}]) assert.ok((await write(phone,revision,command('saveSchedule',{...schedule,...patch}))).error)
+  const beforeScheduleFailure=await snapshot(phone)
+  offline=true
+  assert.ok((await phone.rpc('planner_snapshot')).error)
+  assert.ok((await write(phone,revision,command('saveSchedule',{...schedule,note:'不得写入'}))).error)
+  offline=false
+  assert.deepEqual(await snapshot(phone),beforeScheduleFailure)
+  console.log('通过：日程双向读写、响应丢失幂等、数据库重复占用、真实双会话竞争、临时 105 分钟、跨账号拒绝、非法日期/快照与断网；初始进度不变。')
+  const scheduleData={categories:beforeScheduleFailure.categories,tasks:beforeScheduleFailure.tasks,schedules:beforeScheduleFailure.schedules,settings:beforeScheduleFailure.settings}
+  for(const schedules of [[{...beforeScheduleFailure.schedules[0],taskId:randomUUID()}],[beforeScheduleFailure.schedules[0],{...beforeScheduleFailure.schedules[0],id:randomUUID()}]]) {
+    const failedId=randomUUID()
+    assert.ok((await write(phone,revision,command('restore',{...scheduleData,schedules}),failedId)).error)
+    assert.deepEqual(await snapshot(phone),beforeScheduleFailure)
+    assert.equal((await phone.rpc('planner_receipt',{p_request_id:failedId})).data,null)
+  }
+  const scheduleRestoreId=randomUUID()
+  assert.equal((await write(phone,revision,command('restore',scheduleData),scheduleRestoreId)).error,null)
+  assert.equal((await write(phone,revision,command('restore',scheduleData),scheduleRestoreId)).error,null)
+  assert.equal((await write(desktop,revision,command('saveSchedule',schedule))).error?.message,'REVISION_CONFLICT');revision++
+  const afterRestore=await snapshot(desktop)
+  const businessSchedules=(rows:Record<string,unknown>[])=>rows.map(s=>({...s,createdAt:null,updatedAt:null}))
+  assert.deepEqual(businessSchedules(afterRestore.schedules),businessSchedules(scheduleData.schedules))
+  // Preflight base is invalidated by another device's edit before restore.
+  assert.equal((await write(desktop,revision,command('saveSchedule',{...schedule,note:'预检后更新'}))).error,null)
+  assert.equal((await write(phone,revision,command('restore',scheduleData))).error?.message,'REVISION_CONFLICT');revision++
+  const deleteId=randomUUID(),deleteCommand=command('removeSchedule',{id:schedule.id})
+  assert.equal((await write(phone,revision,deleteCommand,deleteId)).error,null)
+  assert.equal((await write(phone,revision,deleteCommand,deleteId)).error,null);revision++
+  assert.equal((await snapshot(desktop)).schedules.length,1)
+  // Canonical output of validated v1 -> v2 migration (parser covered by unit tests).
+  const migratedStage1={categories:scheduleData.categories,tasks:scheduleData.tasks,settings:scheduleData.settings,schedules:[]}
+  assert.equal((await write(phone,revision,command('restore',migratedStage1))).error,null);revision++
+  assert.equal((await snapshot(desktop)).schedules.length,0)
+  assert.equal((await snapshot(desktop)).tasks[0].initialCompletedUnits,'8')
+  assert.equal((await snapshot(other)).schedules.length,0)
+  console.log('通过：含日程恢复中途失败全部回滚、完整快照恢复/重试、预检后并发拒绝、恢复后旧表单拒绝、移除幂等及阶段 1 迁移输出的云端原子恢复。')
   await phone.auth.signOut({scope:'local'})
   assert.ok((await phone.rpc('planner_snapshot')).error)
   await login(phone,env.SUPABASE_TEST_EMAIL_A,env.SUPABASE_TEST_PASSWORD_A)
@@ -127,7 +184,7 @@ try {
   if (cleanupReady) {
     try {
       const latest = await snapshot(desktop)
-      const result = await write(desktop,latest.revision,command('restore',{categories:[],tasks:[],settings:initial.settings}))
+      const result = await write(desktop,latest.revision,command('restore',{categories:[],tasks:[],schedules:[],settings:initial.settings}))
       assert.equal(result.error,null)
       console.log('已清理 A 测试业务数据；内部递增版本与回执保留。')
     } catch { console.error('测试数据清理失败，请在测试项目内检查 A 账号。'); process.exitCode=1 }

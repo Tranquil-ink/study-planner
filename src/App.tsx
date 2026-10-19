@@ -63,7 +63,7 @@ export default function App() {
           {auth && repository ? <SessionBoundary auth={auth} Content={AuthenticatedContent} /> : <section className="panel">
             <h1>尚未配置云端连接</h1>
             <p>请按 README 配置 Supabase 项目后再登录。当前不能读取或保存学习数据。</p>
-            <p>阶段 1 提供任务池和完整备份；日历、周期计划、复盘将在后续阶段开放。</p>
+            <p>阶段 2 提供任务池、日历排程和完整备份；周期计划、实际记录与复盘将在后续阶段开放。</p>
           </section>}
           <footer>按自己的节奏规划，按真实的投入记录。</footer>
         </div>

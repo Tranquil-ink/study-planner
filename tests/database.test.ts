@@ -24,12 +24,13 @@ beforeAll(async () => {
     grant usage on schema auth to anon,authenticated; grant execute on function auth.uid() to anon,authenticated;
     insert into auth.users values('${ownerA}'),('${ownerB}');`)
   await db.exec(await readFile('supabase/migrations/202610170001_stage1.sql', 'utf8'))
+  await db.exec(await readFile('supabase/migrations/202610190001_stage2.sql', 'utf8'))
 }, 30000)
 afterAll(async () => { await db?.close() })
 describe('迁移在本地 PostgreSQL 引擎上的权限与事务检查', () => {
   it('匿名不能读任何表或调用任何公开 RPC', async () => {
     await actor('', 'anon')
-    for (const table of ['categories','tasks','settings','dataset_state','operation_receipts']) await expect(db.query(`select * from public.planner_${table}`)).rejects.toThrow(/permission denied/)
+    for (const table of ['categories','tasks','schedules','settings','dataset_state','operation_receipts']) await expect(db.query(`select * from public.planner_${table}`)).rejects.toThrow(/permission denied/)
     await expect(snapshot()).rejects.toThrow(/permission denied/)
     await expect(mutate({ type: 'saveCategory', value: category },0)).rejects.toThrow(/permission denied/)
     await expect(db.query('select public.planner_receipt($1)',[randomUUID()])).rejects.toThrow(/permission denied/)
@@ -58,7 +59,7 @@ describe('迁移在本地 PostgreSQL 引擎上的权限与事务检查', () => {
     await expect(db.query('delete from public.planner_categories')).rejects.toThrow(/permission denied/)
     await expect(db.query('select planner_private.lock_dataset($1)',[ownerA])).rejects.toThrow(/permission denied/)
     await actor(ownerB)
-    for (const table of ['categories','tasks','settings','dataset_state','operation_receipts']) expect((await db.query(`select * from public.planner_${table} where owner_id=$1`,[ownerA])).rows).toEqual([])
+    for (const table of ['categories','tasks','schedules','settings','dataset_state','operation_receipts']) expect((await db.query(`select * from public.planner_${table} where owner_id=$1`,[ownerA])).rows).toEqual([])
     await snapshot()
     await expect(mutate({ type: 'saveTask', value: task },0)).rejects.toThrow(/foreign key/)
     await expect(mutate({ type: 'saveCategory', value: { ...category, owner_id: ownerA } },0)).rejects.toThrow('VALIDATION')

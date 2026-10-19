@@ -1,4 +1,5 @@
 // Browser simulation only: synthetic Auth/HTTP + PGlite, never a cloud acceptance result.
+import { checkCalendar } from './calendar-browser-check.mjs'
 import { chromium } from 'playwright'
 import { spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -20,6 +21,7 @@ const db = new PGlite()
 const userId = '10000000-0000-4000-8000-000000000001'
 await db.exec(`create role anon; create role authenticated; create schema auth; create table auth.users(id uuid primary key); create function auth.uid() returns uuid language sql stable as $$ select '${userId}'::uuid $$; insert into auth.users values('${userId}');`)
 await db.exec(await fs.readFile('supabase/migrations/202610170001_stage1.sql','utf8'))
+  await db.exec(await fs.readFile('supabase/migrations/202610190001_stage2.sql', 'utf8'))
 const browser = await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH,headless:true,args:['--no-sandbox']})
 const errors=[]
 const allPages=[]
@@ -135,6 +137,7 @@ try {
   await p.getByRole('heading',{name:'浏览器虚构理论力学',exact:true}).waitFor()
   phone.mode('normal')
   await p.getByRole('button',{name:'获取最新数据',exact:true}).click()
+  await checkCalendar({phone,desktop,saved,db})
   await p.getByRole('link',{name:'数据设置'}).click()
   const downloadPromise=p.waitForEvent('download')
   await p.getByRole('button',{name:'从云端导出完整 JSON',exact:true}).click()
@@ -143,7 +146,7 @@ try {
   const backup=JSON.parse(await fs.readFile('work/browser-backup.json','utf8'))
   assert.equal(backup.data.tasks.length,1)
   await p.getByLabel('选择备份 / 本地数据迁移文件').setInputFiles('work/browser-backup.json')
-  await p.getByRole('heading',{name:'备份恢复预览（v1）',exact:true}).waitFor()
+  await p.getByRole('heading',{name:'备份恢复预览（v2）',exact:true}).waitFor()
   await p.getByLabel('我确认替换当前账号全部业务数据与设置').check()
   await p.getByRole('button',{name:'确认恢复到云端',exact:true}).click();await saved(p)
   await p.getByRole('link',{name:'任务池'}).click()
@@ -177,7 +180,7 @@ try {
   await p.getByRole('button',{name:'新增分类',exact:true}).waitFor()
   await p.reload()
   await p.getByRole('button',{name:'新增分类',exact:true}).waitFor()
-  for(const [label,title] of [['日历','日历排程尚未实现'],['周期计划','周期与周预算尚未实现'],['复盘','复盘与预测尚未实现']]) {
+  for(const [label,title] of [['周期计划','周期与周预算尚未实现'],['复盘','复盘与预测尚未实现']]) {
     await p.getByRole('link',{name:label,exact:true}).click()
     await p.getByRole('heading',{name:title,exact:true}).waitFor()
   }

@@ -23,7 +23,7 @@ describe('客户端失败与迟到响应处理（模拟传输）', () => {
     await expect(repo.submit(operation)).resolves.toEqual({ requestId: operation.requestId, revision: 1 })
     expect(calls[0]).toEqual(calls[1])
   })
-  it.each([['PGRST301','JWT expired','auth'],['P0001','REVISION_CONFLICT','conflict'],['P0001','PROGRESS_LIMIT','validation']])('映射 %s / %s',async (code,message,kind) => {
+  it.each([['PGRST301','JWT expired','auth'],['P0001','REVISION_CONFLICT','conflict'],['P0001','PROGRESS_LIMIT','validation'],['23505','duplicate key violates planner_schedules_occupied','conflict'],['P0001','SCHEDULE_MISSING','conflict']])('映射 %s / %s',async (code,message,kind) => {
     const repo = repository(async () => new Response(JSON.stringify({ code,message }),{ status: 400 }))
     await expect(repo.submit(operation)).rejects.toHaveProperty('kind',kind)
   })
