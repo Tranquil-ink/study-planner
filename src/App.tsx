@@ -1,7 +1,19 @@
 import { useEffect } from 'react'
-import { FeaturePlaceholder } from './components/FeaturePlaceholder'
+import { configuration, makeClient, makeRepository } from './data/supabase'
+import { authService } from './data/auth'
+import { SessionBoundary, type SessionProps } from './features/auth/SessionBoundary'
+import { Workspace } from './features/Workspace'
+const config = configuration(import.meta.env)
+const client = config ? makeClient(config.url, config.key) : null
+const auth = client ? authService(client) : null
+const repository = client ? makeRepository(client) : null
 import { pages } from './navigation'
 import { useCurrentPage } from './useCurrentPage'
+
+function AuthenticatedContent({ user, authorized, expire, logout, login }: SessionProps) {
+  const page = useCurrentPage()
+  return repository && <Workspace key={user.id} repository={repository} page={page} email={user.email} authorized={authorized} expire={expire} logout={logout} login={login} />
+}
 
 export default function App() {
   const currentPage = useCurrentPage()
@@ -48,13 +60,11 @@ export default function App() {
 
       <main id="main-content" tabIndex={-1}>
         <div className="content">
-          <p className="version-notice">当前版本仅提供页面导航与基础布局，暂不能记录或保存学习数据。</p>
-          <header className="page-header" aria-live="polite" aria-atomic="true">
-            <p className="eyebrow">我的学习空间</p>
-            <h1>{currentPage.label}</h1>
-            <p>{currentPage.description}</p>
-          </header>
-          <FeaturePlaceholder page={currentPage} />
+          {auth && repository ? <SessionBoundary auth={auth} Content={AuthenticatedContent} /> : <section className="panel">
+            <h1>尚未配置云端连接</h1>
+            <p>请按 README 配置 Supabase 项目后再登录。当前不能读取或保存学习数据。</p>
+            <p>阶段 1 提供任务池和完整备份；日历、周期计划、复盘将在后续阶段开放。</p>
+          </section>}
           <footer>按自己的节奏规划，按真实的投入记录。</footer>
         </div>
       </main>

@@ -14,7 +14,11 @@ export default tseslint.config(
     extends: [reactHooks.configs.flat.recommended, reactRefresh.configs.vite],
   },
   {
-    files: ['*.config.{js,ts}'],
+    files: ['scripts/browser-check.mjs'],
+    languageOptions: { globals: globals.browser },
+  },
+  {
+    files: ['*.config.{js,ts}', 'scripts/**/*.{ts,mjs}', 'tests/**/*.ts'],
     languageOptions: { globals: globals.node },
   },
 )

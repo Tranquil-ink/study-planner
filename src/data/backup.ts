@@ -1,0 +1,43 @@
+import { z } from 'zod'
+import { businessData, datasetSchema, revisionSchema, type Snapshot } from '../domain/model'
+
+export const APP_VERSION = '0.1.0'
+export const backupSchema = z.strictObject({
+  format: z.literal('study-planner'), schemaVersion: z.literal(1), appVersion: z.string().min(1).max(40),
+  exportedAt: z.iso.datetime({ offset: true }), sourceRevision: revisionSchema.optional(), data: datasetSchema,
+})
+export type Backup = z.infer<typeof backupSchema>
+
+// Explicit migration contract, not a claim that an IndexedDB release existed.
+// Same entities as v1, but quantities are JSON numbers. Unknown formats fail closed.
+const legacySchema = z.strictObject({
+  format: z.literal('study-planner-local'), schemaVersion: z.literal(0),
+  appVersion: z.string().min(1).max(40), exportedAt: z.iso.datetime({ offset: true }),
+  data: z.strictObject({ categories: z.array(z.unknown()), tasks: z.array(z.record(z.string(), z.unknown())), settings: z.unknown() }),
+})
+export function parseBackup(contents: string): { backup: Backup; migrated: boolean } {
+  if (new TextEncoder().encode(contents).length > 10 * 1024 * 1024) throw new Error('文件超过 10 MiB，请分辨是否为本应用备份')
+  let raw: unknown
+  try { raw = JSON.parse(contents) } catch { throw new Error('文件不是有效 JSON') }
+  const old = legacySchema.safeParse(raw)
+  if (old.success) {
+    const data = old.data.data
+    const tasks = data.tasks.map(task => {
+      const convert = (value: unknown) => {
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('旧格式进度必须是有限非负数')
+        return String(value)
+      }
+      return { ...task, totalUnits: task.totalUnits === null ? null : convert(task.totalUnits), initialCompletedUnits: convert(task.initialCompletedUnits) }
+    })
+    const migrated = backupSchema.safeParse({ format: 'study-planner', schemaVersion: 1, appVersion: APP_VERSION, exportedAt: old.data.exportedAt, data: { ...data, tasks } })
+    if (!migrated.success) throw new Error('旧备份校验失败，请检查字段类型、时间、重复 ID、分类引用和进度范围；不会修改云端数据')
+    return { backup: migrated.data, migrated: true }
+  }
+  if (typeof raw === 'object' && raw && 'schemaVersion' in raw && raw.schemaVersion !== 1) throw new Error('不支持此备份版本；不会修改云端数据')
+  const result = backupSchema.safeParse(raw)
+  if (!result.success) throw new Error('备份校验失败，请检查文件格式、字段类型、时间、重复 ID、分类引用和进度范围；不会修改云端数据')
+  return { backup: result.data, migrated: false }
+}
+export function createBackup(snapshot: Snapshot): Backup {
+  return backupSchema.parse({ format: 'study-planner', schemaVersion: 1, appVersion: APP_VERSION, exportedAt: new Date().toISOString(), sourceRevision: snapshot.revision, data: businessData(snapshot) })
+}
