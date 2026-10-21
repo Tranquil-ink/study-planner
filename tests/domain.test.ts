@@ -33,7 +33,7 @@ describe('精确进度与备份边界', () => {
     expect(() => parseBackup(JSON.stringify(backup))).toThrow()
   })
   it('约定旧格式映射保留 ID、分类、位置和数值；未知格式拒绝', () => {
-    const data = fixtureData()
+    const data = { categories: fixtureData().categories, tasks: fixtureData().tasks, settings: fixtureData().settings }
     const old = { format: 'study-planner-local', schemaVersion: 0, appVersion: '0.0.0', exportedAt: '2026-10-17T00:00:00Z', data: { ...data, tasks: [{ ...data.tasks[0], totalUnits: 40, initialCompletedUnits: 8.5 }] } }
     const result = parseBackup(JSON.stringify(old))
     expect(result.migrated).toBe(true)
