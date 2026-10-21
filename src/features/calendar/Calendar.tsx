@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { addDays, clockTime, dateLabel, isBusinessDate, plannedMinutes, SLOTS, today, weekDates } from '../../domain/calendar'
+import { addDays, clockTime, dateLabel, isBusinessDate, plannedMinutes, slotsFor, SLOT_TEMPLATE_VERSION, today, weekDates } from '../../domain/calendar'
 import type { ScheduleInput, Snapshot } from '../../domain/model'
-export interface ScheduleEditor { value: ScheduleInput; base: number; existing: boolean }
-export function Calendar({ snapshot, editor, disabled, edit, save, remove, cancel }: {
+export interface ScheduleEditor { value: ScheduleInput; base: number; existing: boolean; mergeIds?: string[]; contentConfirmed?: boolean }
+export function Calendar({ snapshot, editor, disabled, edit, save, remove, split, cancel }: {
   snapshot: Snapshot; editor: ScheduleEditor | null; disabled: boolean; edit: (value: ScheduleEditor) => void;
-  save: () => void; remove: () => void; cancel: () => void;
+  save: () => void; remove: () => void; split: (copyPlanText: boolean) => void; cancel: () => void;
 }) {
   const editorRegion = useRef<HTMLElement>(null)
   const editingId = editor?.value.id
@@ -14,6 +14,11 @@ export function Calendar({ snapshot, editor, disabled, edit, save, remove, cance
       editorRegion.current?.scrollIntoView({ block: 'start' })
     }
   }, [editingId])
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
+  const [selectionError, setSelectionError] = useState('')
+  const [copyPlanText, setCopyPlanText] = useState(false)
+  const [choices, setChoices] = useState<Record<string, string>>({})
   const [date, setDate] = useState(today)
   const [view, setView] = useState<'day' | 'week'>(() => window.matchMedia('(max-width: 760px)').matches ? 'day' : 'week')
   const dates = view === 'day' ? [date] : weekDates(date)
@@ -30,7 +35,29 @@ export function Calendar({ snapshot, editor, disabled, edit, save, remove, cance
   }
   function adjacent(direction: number) { try { return addDays(date, direction * (view === 'day' ? 1 : 7)) } catch { return null } }
   function patch(value: Partial<ScheduleInput>) { if (editor) edit({ ...editor, value: { ...editor.value, ...value } }) }
-  const missing = !!editor?.existing && !snapshot.schedules.some(s => s.id === editor.value.id)
+  const missing = !!editor && (editor.mergeIds ? editor.mergeIds.some(id => !snapshot.schedules.some(s => s.id === id)) : editor.existing && !snapshot.schedules.some(s => s.id === editor.value.id))
+  const sources = editor?.mergeIds?.map(id => snapshot.schedules.find(s => s.id === id)).filter(s => !!s) ?? []
+  const differing = sources.some(s => s.taskId !== sources[0].taskId || s.title !== sources[0].title || s.plannedRangeText !== sources[0].plannedRangeText || s.note !== sources[0].note)
+  const decisionsMade = !differing || ['task', 'plannedRangeText', 'note'].every(key => !!choices[key])
+  const editorSlots = slotsFor(editor?.value.slotTemplateVersion ?? SLOT_TEMPLATE_VERSION)
+  // Include the historical 20:15 boundary only where needed to render immutable old snapshots.
+  const template = SLOT_TEMPLATE_VERSION
+  const slots = slotsFor(template)
+  const historicalEvening = snapshot.schedules.some(s => dates.includes(s.date) && s.slotTemplateVersion === 1 && s.endMinute > 1110)
+  const displaySlots = slots.flatMap(s => historicalEvening && s.id === 10 ? [{ ...s, endMinute: 1215 }, { ...s, startMinute: 1215 }] : [s])
+  const gridRow = (index: number) => index + 2 + (displaySlots[index].startMinute >= 780 ? 1 : 0) + (displaySlots[index].startMinute >= 1110 ? 1 : 0)
+  function beginMerge() {
+    const rows = selected.map(id => snapshot.schedules.find(s => s.id === id)).filter(s => !!s).sort((a, b) => a.startMinute - b.startMinute)
+    if (rows.length < 2 || rows.some((s, i) => s.date !== rows[0].date || (i > 0 && rows[i - 1].endMinute !== s.startMinute))) {
+      setSelectionError('请选择同一天、真实时间连续的至少两个安排；不能跨午休或晚饭。'); return
+    }
+    const first = rows[0]
+    const { createdAt: _created, updatedAt: _updated, ...value } = first
+    void _created; void _updated
+    edit({ base: snapshot.revision, existing: false, mergeIds: rows.map(s => s.id), contentConfirmed: false,
+      value: { ...value, slotIds: rows.flatMap(s => s.slotIds), endMinute: rows.at(-1)!.endMinute } })
+    setChoices({}); setSelecting(false); setSelected([]); setSelectionError('')
+  }
   return <section aria-label="日历排程">
     <div className="panel calendar-toolbar">
       <div className="actions"><button aria-pressed={view === 'day'} onClick={() => setView('day')}>日视图</button><button aria-pressed={view === 'week'} onClick={() => setView('week')}>周视图</button></div>
@@ -39,40 +66,64 @@ export function Calendar({ snapshot, editor, disabled, edit, save, remove, cance
       <p>Asia/Shanghai · 周一开始 · {view === 'day' ? dateLabel(date) : `${dates[0]} ～ ${dates.at(-1)}`}</p>
     </div>
     {editor && <section ref={editorRegion} tabIndex={-1} className="panel" aria-label="日程编辑表单">
-      <h2>{editor.existing ? '编辑日程' : '新建日程'}</h2>
+      <h2>{editor.mergeIds ? '合并时段：确认最终内容' : editor.existing ? '编辑日程' : '新建日程'}</h2>
       <p>{dateLabel(editor.value.date)} · {clockTime(editor.value.startMinute)}–{clockTime(editor.value.endMinute)} · 计划 {plannedMinutes(editor.value)} 分钟</p>
-      <form onSubmit={e => { e.preventDefault(); save() }}>
+      <form onSubmit={e => { e.preventDefault(); if (!editor.mergeIds || (editor.contentConfirmed && decisionsMade)) save() }}>
         <fieldset disabled={disabled || missing}>
+          {editor.mergeIds ? <div>
+            <p>以下内容将在合并后由最终表单替代，请逐项核对。</p>
+            {sources.map(row => <p key={row.id}>{clockTime(row.startMinute)}–{clockTime(row.endMinute)} · {snapshot.tasks.find(t => t.id === row.taskId)?.title ?? row.title} · 范围：{row.plannedRangeText || '空'} · 备注：{row.note || '空'}</p>)}
+            {differing && <><p>内容不同，必须明确选择任务、计划范围和备注；也可选择手动填写后编辑下方内容。</p>
+              {(['task', 'plannedRangeText', 'note'] as const).map(key => <div key={key}><label htmlFor={`merge-${key}`}>合并后的{key === 'task' ? '任务选择' : key === 'note' ? '备注选择' : '计划范围选择'}</label><select id={`merge-${key}`} value={choices[key] ?? ''} onChange={e => {
+                setChoices({ ...choices, [key]: e.target.value })
+                const row = sources.find(r => r.id === e.target.value)
+                if (row) patch(key === 'task' ? { taskId: row.taskId, title: row.title } : { [key]: row[key] })
+              }}><option value="">请明确选择</option>{sources.map(row => <option key={row.id} value={row.id}>{clockTime(row.startMinute)}：{key === 'task' ? snapshot.tasks.find(t => t.id === row.taskId)?.title ?? row.title : row[key] || '空'}</option>)}<option value="custom">手动填写下方最终内容</option></select></div>)}
+            </>}
+          </div> : <>
           <label>日程日期<input type="date" min="0001-01-01" max="9999-12-31" required value={editor.value.date} onChange={e => patch({ date: e.target.value })} /></label>
-          <div><label htmlFor="schedule-slot">基础时段</label><select id="schedule-slot" value={editor.value.slotIds[0]} onChange={e => {
-            const slot = SLOTS.find(s => s.id === Number(e.target.value))!
-            patch({ slotIds: [slot.id], startMinute: slot.startMinute, endMinute: slot.endMinute })
-          }}>{SLOTS.map(s => <option key={s.id} value={s.id}>{clockTime(s.startMinute)}–{clockTime(s.endMinute)}（{plannedMinutes(s)} 分钟）</option>)}</select></div>
+          <div><label htmlFor="schedule-slot">基础时段（起点）</label><select id="schedule-slot" value={editor.value.slotIds[0]} onChange={e => {
+            const index = editorSlots.findIndex(s => s.id === Number(e.target.value))
+            const span = editorSlots.slice(index, index + editor.value.slotIds.length)
+            patch({ slotIds: span.map(s => s.id), startMinute: span[0].startMinute, endMinute: span.at(-1)!.endMinute })
+          }}>{editorSlots.map((s, index) => <option key={s.id} value={s.id} disabled={index + editor.value.slotIds.length > editorSlots.length}>{clockTime(s.startMinute)}–{clockTime(s.endMinute)}（{plannedMinutes(s)} 分钟）</option>)}</select></div>
+          {!editor.existing && <div><label htmlFor="schedule-end">结束基础时段</label><select id="schedule-end" value={editor.value.slotIds.at(-1)} onChange={e => {
+            const span = editorSlots.filter(s => s.id >= editor.value.slotIds[0] && s.id <= Number(e.target.value))
+            patch({ slotIds: span.map(s => s.id), endMinute: span.at(-1)!.endMinute })
+          }}>{editorSlots.filter(s => s.id >= editor.value.slotIds[0]).map(s => <option key={s.id} value={s.id}>{clockTime(s.endMinute)}</option>)}</select></div>}
+          </>}
           <div><label htmlFor="schedule-kind">安排类型</label><select id="schedule-kind" value={editor.value.taskId === null ? 'temporary' : 'task'} onChange={e => patch(e.target.value === 'temporary' ? { taskId: null, title: '' } : { taskId: '', title: '' })}><option value="temporary">临时任务</option><option value="task">任务池中的长期任务</option></select></div>
           {editor.value.taskId === null ? <label>临时任务名称<input required maxLength={200} value={editor.value.title} onChange={e => patch({ title: e.target.value })} /></label> : <div><label htmlFor="schedule-task">关联长期任务</label><select id="schedule-task" required value={editor.value.taskId} onChange={e => patch({ taskId: e.target.value, title: snapshot.tasks.find(t => t.id === e.target.value)?.title ?? '' })}><option value="">请选择任务</option>{snapshot.tasks.filter(t => (!t.archived && !snapshot.categories.find(c => c.id === t.categoryId)?.archived) || t.id === editor.value.taskId).map(t => <option value={t.id} key={t.id}>{t.title}{t.archived ? '（已归档）' : ''}</option>)}</select></div>}
           <label>计划学习范围<input maxLength={500} value={editor.value.plannedRangeText} placeholder="例如 2.1～2.3" onChange={e => patch({ plannedRangeText: e.target.value })} /></label>
           <div><label htmlFor="schedule-note">日程备注</label><textarea id="schedule-note" maxLength={5000} value={editor.value.note} onChange={e => patch({ note: e.target.value })} /></div>
         </fieldset>
+        {editor.mergeIds && <label className="check"><input type="checkbox" disabled={disabled || !decisionsMade} checked={editor.contentConfirmed ?? false} onChange={e => edit({ ...editor, contentConfirmed: e.target.checked })} />我已明确选择并确认合并后的任务、计划范围和备注</label>}
+        {editor.existing && editor.value.slotIds.length > 1 && <div className="notice"><label className="check"><input type="checkbox" disabled={disabled} checked={copyPlanText} onChange={e => setCopyPlanText(e.target.checked)} />拆分时复制计划范围和备注到每个基础时段</label><p>不勾选时，文字只保留在第一个时段。任务关联保留，计划总分钟数不变。拆分以云端已保存内容为准，表单修改请先保存。</p><button type="button" disabled={disabled || missing || editor.base !== snapshot.revision} onClick={() => { if (window.confirm('将云端已保存日程拆分为基础时段？未保存的表单修改不会包含在拆分中。')) split(copyPlanText) }}>拆分恢复基础时段</button></div>}
         <p className="muted">排程仅保存计划，不增加任务进度或实际投入。输入在云端确认前保留。</p>
         {missing && <p role="alert">此日程已被移除或不在恢复后的数据中。请复制需要的输入，取消后另建日程。</p>}
-        {editor.base !== snapshot.revision && <div className="notice"><p>云端版本已变化，请对照下方最新日历核对；旧表单不会自动覆盖。</p><button type="button" disabled={disabled || missing} onClick={() => { if (window.confirm('已核对最新日程与当前输入？继续后将以当前输入更新最新版本。')) edit({ ...editor, base: snapshot.revision }) }}>已核对，将日程输入应用到最新版本</button></div>}
-        <div className="actions"><button disabled={disabled || missing || editor.base !== snapshot.revision}>保存日程到云端</button>{editor.existing && <button type="button" disabled={disabled || missing || editor.base !== snapshot.revision} onClick={remove}>移除此日程</button>}<button type="button" disabled={disabled} onClick={cancel}>取消日程编辑</button></div>
+        {editor.base !== snapshot.revision && <div className="notice"><p>云端版本已变化，请对照下方最新日历核对；旧表单不会自动覆盖。</p><button type="button" disabled={disabled || missing} onClick={() => { if (window.confirm('已核对最新日程与当前输入？继续后将以当前输入更新最新版本。')) edit({ ...editor, base: snapshot.revision, contentConfirmed: false }) }}>已核对，将日程输入应用到最新版本</button></div>}
+        <div className="actions"><button disabled={disabled || missing || editor.base !== snapshot.revision || (!!editor.mergeIds && (!editor.contentConfirmed || !decisionsMade))}>{editor.mergeIds ? '确认合并到云端' : '保存日程到云端'}</button>{editor.existing && <button type="button" disabled={disabled || missing || editor.base !== snapshot.revision} onClick={remove}>移除此日程</button>}<button type="button" disabled={disabled} onClick={cancel}>取消日程编辑</button></div>
       </form>
     </section>}
+    {snapshot.schedules.some(s => dates.includes(s.date) && s.slotTemplateVersion === 1) && <p className="notice">此日期范围含历史安排，卡片保留原时间；新安排使用晚间 90／60／60 分钟，与历史安排重叠时不可保存。</p>}
+    {!editor && <div className="panel"><button disabled={disabled} onClick={() => { setSelecting(!selecting); setSelected([]); setSelectionError('') }}>{selecting ? '取消选择时段' : '选择时段合并'}</button>{selecting && <><p>点击已有安排选择／取消；合并块可再次合并。空白连续时段可通过“安排”的结束基础时段一次创建。</p><button disabled={disabled || selected.length < 2} onClick={beginMerge}>合并所选安排（{selected.length}）</button></>}{selectionError && <p role="alert">{selectionError}</p>}</div>}
     {view === 'week' && <p className="muted">周历可在下方区域横向滚动；手机可切换日视图完成全部编辑。</p>}
     <div className="calendar-scroll" tabIndex={view === 'week' ? 0 : undefined} aria-label="日历时段区域">
       <div className={`calendar-grid ${view}`} style={{ gridTemplateColumns: `100px repeat(${dates.length}, minmax(0, 1fr))` }}>
         <div className="calendar-heading">时间</div>{dates.map(d => <div className={`calendar-heading ${d === today() ? 'is-today' : ''}`} key={d}>{dateLabel(d)}{d === today() && ' · 今天'}</div>)}
-        {SLOTS.map(slot => <Fragment key={slot.id}>
-          {(slot.id === 5 || slot.id === 9) && <div className="calendar-break" style={{ gridColumn: '1 / -1' }}>{slot.id === 5 ? '12:00–13:00 午休' : '17:00–18:30 晚饭间隔'}</div>}
-          <div className="calendar-time">{clockTime(slot.startMinute)}<br />–{clockTime(slot.endMinute)}<small>{plannedMinutes(slot)} 分钟</small></div>
-          {dates.map(d => {
-            const block = snapshot.schedules.find(s => s.date === d && s.slotIds[0] === slot.id)
+        {displaySlots.map((slot, index) => <Fragment key={slot.startMinute}>
+          {(slot.id === 5 || slot.id === 9) && <div className="calendar-break" style={{ gridColumn: '1 / -1', gridRow: gridRow(index) - 1 }}>{slot.id === 5 ? '12:00–13:00 午休' : '17:00–18:30 晚饭间隔'}</div>}
+          <div className="calendar-time" style={{ gridColumn: 1, gridRow: gridRow(index) }}>{clockTime(slot.startMinute)}<br />–{clockTime(slot.endMinute)}<small>{plannedMinutes(slot)} 分钟</small></div>
+          {dates.map((d, column) => {
+            const block = snapshot.schedules.find(s => s.date === d && s.startMinute < slot.endMinute && slot.startMinute < s.endMinute)
+            if (block && block.startMinute < slot.startMinute) return null
+            const baseSlot = slots.find(s => s.id === slot.id)!
+            const span = block ? displaySlots.filter(s => s.startMinute >= block.startMinute && s.endMinute <= block.endMinute).length : 1
             const task = snapshot.tasks.find(t => t.id === block?.taskId)
             const category = snapshot.categories.find(c => c.id === task?.categoryId)
             const title = task?.title ?? block?.title
-            return <button className={`calendar-slot ${block ? 'occupied' : ''}`} key={d} disabled={disabled || !!editor} aria-label={`${d} ${clockTime(slot.startMinute)} ${block ? `编辑 ${title}` : '安排日程'}`} style={category ? { borderLeftColor: category.color } : undefined} onClick={() => edit({ base: snapshot.revision, existing: !!block, value: block ? { id: block.id, date: block.date, slotTemplateVersion: block.slotTemplateVersion, slotIds: block.slotIds, startMinute: block.startMinute, endMinute: block.endMinute, taskId: block.taskId, title: block.title, plannedRangeText: block.plannedRangeText, note: block.note } : { id: crypto.randomUUID(), date: d, slotTemplateVersion: 1, slotIds: [slot.id], startMinute: slot.startMinute, endMinute: slot.endMinute, taskId: null, title: '', plannedRangeText: '', note: '' } })}>
-              {block ? <><strong>{title}</strong><span>{category?.name ?? '临时任务'}{task?.archived ? ' · 已归档' : ''}</span><span>{block.plannedRangeText || '未填写范围'}</span><span>计划 {plannedMinutes(block)} 分钟</span><small>实际记录尚未开放</small></> : <span>＋ 安排</span>}
+            return <button className={`calendar-slot ${block ? 'occupied' : ''}`} key={d} aria-pressed={selecting ? !!block && selected.includes(block.id) : undefined} disabled={disabled || !!editor || (selecting && !block)} aria-label={`${d} ${clockTime(slot.startMinute)} ${block ? `编辑 ${title}` : '安排日程'}`} style={{ borderLeftColor: category?.color, gridColumn: column + 2, gridRow: `${gridRow(index)} / span ${span}` }} onClick={() => { if (selecting && block) { setSelected(selected.includes(block.id) ? selected.filter(id => id !== block.id) : [...selected, block.id]); return } edit({ base: snapshot.revision, existing: !!block, value: block ? { id: block.id, date: block.date, slotTemplateVersion: block.slotTemplateVersion, slotIds: block.slotIds, startMinute: block.startMinute, endMinute: block.endMinute, taskId: block.taskId, title: block.title, plannedRangeText: block.plannedRangeText, note: block.note } : { id: crypto.randomUUID(), date: d, slotTemplateVersion: template as 1 | 2, slotIds: [baseSlot.id], startMinute: baseSlot.startMinute, endMinute: baseSlot.endMinute, taskId: null, title: '', plannedRangeText: '', note: '' } }); setCopyPlanText(false) }}>
+              {block ? <><strong>{title}</strong><span>{category?.name ?? '临时任务'}{task?.archived ? ' · 已归档' : ''}</span><span>{block.plannedRangeText || '未填写范围'}</span><span>{clockTime(block.startMinute)}–{clockTime(block.endMinute)} · 计划 {plannedMinutes(block)} 分钟{block.slotIds.length > 1 ? '（合并安排）' : ''}</span><small>实际记录尚未开放</small></> : <span>＋ 安排</span>}
             </button>
           })}
         </Fragment>)}

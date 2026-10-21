@@ -22,6 +22,7 @@ const userId = '10000000-0000-4000-8000-000000000001'
 await db.exec(`create role anon; create role authenticated; create schema auth; create table auth.users(id uuid primary key); create function auth.uid() returns uuid language sql stable as $$ select '${userId}'::uuid $$; insert into auth.users values('${userId}');`)
 await db.exec(await fs.readFile('supabase/migrations/202610170001_stage1.sql','utf8'))
   await db.exec(await fs.readFile('supabase/migrations/202610190001_stage2.sql', 'utf8'))
+await db.exec(await fs.readFile('supabase/migrations/202610210001_stage3.sql', 'utf8'))
 const browser = await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH,headless:true,args:['--no-sandbox']})
 const errors=[]
 const allPages=[]
@@ -146,7 +147,7 @@ try {
   const backup=JSON.parse(await fs.readFile('work/browser-backup.json','utf8'))
   assert.equal(backup.data.tasks.length,1)
   await p.getByLabel('选择备份 / 本地数据迁移文件').setInputFiles('work/browser-backup.json')
-  await p.getByRole('heading',{name:'备份恢复预览（v2）',exact:true}).waitFor()
+  await p.getByRole('heading',{name:'备份恢复预览（v3）',exact:true}).waitFor()
   await p.getByLabel('我确认替换当前账号全部业务数据与设置').check()
   await p.getByRole('button',{name:'确认恢复到云端',exact:true}).click();await saved(p)
   await p.getByRole('link',{name:'任务池'}).click()
