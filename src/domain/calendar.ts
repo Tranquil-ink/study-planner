@@ -1,7 +1,7 @@
 // Civil dates are never interpreted in the browser/server's local timezone.
 export const BUSINESS_TIMEZONE = 'Asia/Shanghai'
-export const SLOT_TEMPLATE_VERSION = 1
-export const SLOTS = [
+export const SLOT_TEMPLATE_VERSION = 2
+export const LEGACY_SLOTS = [
   { id: 1, band: '上午', startMinute: 480, endMinute: 540 },
   { id: 2, band: '上午', startMinute: 540, endMinute: 600 },
   { id: 3, band: '上午', startMinute: 600, endMinute: 660 },
@@ -13,6 +13,12 @@ export const SLOTS = [
   { id: 9, band: '晚间', startMinute: 1110, endMinute: 1215 },
   { id: 10, band: '晚间', startMinute: 1215, endMinute: 1320 },
 ] as const
+export const SLOTS = [...LEGACY_SLOTS.slice(0, 8),
+  { id: 9, band: '晚间', startMinute: 1110, endMinute: 1200 },
+  { id: 10, band: '晚间', startMinute: 1200, endMinute: 1260 },
+  { id: 11, band: '晚间', startMinute: 1260, endMinute: 1320 },
+]
+export function slotsFor(version: number) { return version === 1 ? LEGACY_SLOTS : version === 2 ? SLOTS : [] }
 export function isBusinessDate(value: string): boolean {
   if (!/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const stamp = Date.parse(`${value}T00:00:00Z`)
@@ -43,6 +49,10 @@ export function dateLabel(date: string): string {
 export function clockTime(minute: number): string { return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}` }
 export function plannedMinutes(block: { startMinute: number; endMinute: number }): number { return block.endMinute - block.startMinute }
 export function validSlotSnapshot(block: { slotTemplateVersion: number; slotIds: number[]; startMinute: number; endMinute: number }): boolean {
-  const slot = SLOTS.find(s => s.id === block.slotIds[0])
-  return block.slotTemplateVersion === SLOT_TEMPLATE_VERSION && block.slotIds.length === 1 && !!slot && slot.startMinute === block.startMinute && slot.endMinute === block.endMinute
+  const slots = block.slotIds.map(id => slotsFor(block.slotTemplateVersion).find(s => s.id === id))
+  return slots.length > 0 && slots.every((s, i) => !!s && (i === 0 || slots[i - 1]?.endMinute === s.startMinute))
+    && slots[0]?.startMinute === block.startMinute && slots.at(-1)?.endMinute === block.endMinute
+}
+export function overlaps(a: { date: string; startMinute: number; endMinute: number }, b: { date: string; startMinute: number; endMinute: number }) {
+  return a.date === b.date && a.startMinute < b.endMinute && b.startMinute < a.endMinute
 }

@@ -65,7 +65,7 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
         setStatus('保存结果待确认，请重新登录后确认原请求。'); return
       }
       setPending(null);
-      if (operation.command.type === 'saveSchedule' || operation.command.type === 'removeSchedule') setScheduleEditor(null)
+      if (operation.command.type === 'saveSchedule' || operation.command.type === 'removeSchedule' || operation.command.type === 'mergeSchedules' || operation.command.type === 'splitSchedule') setScheduleEditor(null)
       else if (operation.command.type === 'saveCategory' || operation.command.type === 'saveTask') setEditor(null)
       setRequiredRevision(receipt.revision)
       setStatus('已保存到云端。'); await refresh()
@@ -112,8 +112,9 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
         <TaskList snapshot={snapshot} disabled={disabled || !!editor || !!scheduleEditor} edit={setEditor} />
       </div>
       <div hidden={page.id !== 'settings'}><BackupPanel repository={repository} snapshot={snapshot} disabled={disabled || !!editor || !!scheduleEditor} refresh={refresh} restore={(backup: Backup, base) => start({ type: 'restore', value: backup.data }, base)} onError={handleError} /></div>
-      <div hidden={page.id !== 'calendar'}><Calendar snapshot={snapshot} editor={scheduleEditor} disabled={disabled || !!editor} edit={setScheduleEditor} save={() => {
-        if (scheduleEditor) start({ type: 'saveSchedule', value: scheduleEditor.value }, scheduleEditor.base)
+      <div hidden={page.id !== 'calendar'}><Calendar snapshot={snapshot} editor={scheduleEditor} disabled={disabled || !!editor} edit={setScheduleEditor} split={copyPlanText => { if (scheduleEditor) start({ type: 'splitSchedule', value: { id: scheduleEditor.value.id, copyPlanText } }, scheduleEditor.base) }} save={() => {
+        if (scheduleEditor?.mergeIds && !scheduleEditor.contentConfirmed) return
+        if (scheduleEditor) start(scheduleEditor.mergeIds ? { type: 'mergeSchedules', value: { ids: scheduleEditor.mergeIds, result: scheduleEditor.value, contentConfirmed: true } } : { type: 'saveSchedule', value: scheduleEditor.value }, scheduleEditor.base)
       }} remove={() => {
         if (scheduleEditor && window.confirm('确认移除此日程？此操作不会删除关联的长期任务。')) start({ type: 'removeSchedule', value: { id: scheduleEditor.value.id } }, scheduleEditor.base)
       }} cancel={() => { if (window.confirm('放弃日程表单的未保存输入？')) setScheduleEditor(null) }} /></div>

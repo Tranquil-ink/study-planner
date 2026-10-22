@@ -14,7 +14,7 @@ export default tseslint.config(
     extends: [reactHooks.configs.flat.recommended, reactRefresh.configs.vite],
   },
   {
-    files: ['scripts/browser-check.mjs', 'scripts/calendar-browser-check.mjs'],
+    files: ['scripts/browser-check.mjs', 'scripts/calendar-browser-check.mjs', 'scripts/slots-browser-check.mjs'],
     languageOptions: { globals: globals.browser },
   },
   {

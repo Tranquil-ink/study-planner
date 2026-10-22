@@ -43,7 +43,7 @@ async function snapshot(c: SupabaseClient) {
 }
 const command = (type:string,value:unknown) => ({type,value})
 const write = (c:SupabaseClient, revision:number, cmd:unknown, requestId=randomUUID()) => c.rpc('planner_mutate',{p_request_id:requestId,p_expected_revision:revision,p_command:cmd})
-const tables = ['categories','tasks','schedules','settings','dataset_state','operation_receipts']
+const tables = ['categories','tasks','schedules','schedule_slots','schedule_cells','settings','dataset_state','operation_receipts']
 let cleanupReady = false
 let initial: Awaited<ReturnType<typeof snapshot>>
 try {
@@ -136,7 +136,7 @@ try {
   assert.equal(concurrentSchedules.find((s:Record<string,unknown>)=>s.taskId===null).endMinute-concurrentSchedules.find((s:Record<string,unknown>)=>s.taskId===null).startMinute,105)
   assert.ok((await write(other,initialB.revision,command('saveSchedule',schedule))).error,'跨账号任务引用未拒绝')
   assert.ok((await write(other,initialB.revision,command('saveSchedule',{...schedule,owner_id:userA}))).error)
-  for(const patch of [{date:'2026-02-30'},{startMinute:541},{slotIds:[2,3]},{slotTemplateVersion:2},{taskId:randomUUID()}]) assert.ok((await write(phone,revision,command('saveSchedule',{...schedule,...patch}))).error)
+  for(const patch of [{date:'2026-02-30'},{startMinute:541},{slotIds:[2,3]},{slotTemplateVersion:3},{taskId:randomUUID()}]) assert.ok((await write(phone,revision,command('saveSchedule',{...schedule,...patch}))).error)
   const beforeScheduleFailure=await snapshot(phone)
   offline=true
   assert.ok((await phone.rpc('planner_snapshot')).error)
@@ -172,6 +172,71 @@ try {
   assert.equal((await snapshot(desktop)).tasks[0].initialCompletedUnits,'8')
   assert.equal((await snapshot(other)).schedules.length,0)
   console.log('通过：含日程恢复中途失败全部回滚、完整快照恢复/重试、预检后并发拒绝、恢复后旧表单拒绝、移除幂等及阶段 1 迁移输出的云端原子恢复。')
+  // Stage 3: real independent Supabase sessions; every operation is one RPC.
+  const morningA={...schedule,id:randomUUID(),slotTemplateVersion:2}
+  const morningB={...morningA,id:randomUUID(),slotIds:[3],startMinute:600,endMinute:660,note:'明确不同内容'}
+  for(const value of [morningA,morningB]) assert.equal((await write(phone,revision++,command('saveSchedule',value))).error,null)
+  const morningMerged={...morningA,slotIds:[2,3],endMinute:660,note:'用户明确选择后的内容'}
+  const mergeMorning=command('mergeSchedules',{ids:[morningA.id,morningB.id],result:morningMerged,contentConfirmed:true})
+  const beforeMerge=await snapshot(phone)
+  for(const cmd of [command('mergeSchedules',{ids:[morningA.id,morningB.id],result:morningMerged,contentConfirmed:false}),command('mergeSchedules',{ids:[morningA.id,morningB.id],result:{...morningMerged,taskId:randomUUID()},contentConfirmed:true})]) {
+    const id=randomUUID();assert.ok((await write(phone,revision,cmd,id)).error)
+    assert.deepEqual(await snapshot(phone),beforeMerge)
+    assert.equal((await phone.rpc('planner_receipt',{p_request_id:id})).data,null)
+  }
+  const mergeId=randomUUID();loseResponse=true
+  assert.ok((await write(phone,revision,mergeMorning,mergeId)).error)
+  assert.equal((await write(desktop,revision,mergeMorning,mergeId)).error,null);revision++
+  assert.equal((await snapshot(phone)).schedules.length,1)
+  assert.equal((await snapshot(phone)).schedules[0].endMinute-(await snapshot(phone)).schedules[0].startMinute,120)
+  const occupied=await phone.from('planner_schedule_slots').select('*');assert.equal(occupied.error,null);assert.equal(occupied.data?.length,2)
+  // Split and competing move start from the same revision; exactly one commits.
+  const splitMorning=command('splitSchedule',{id:morningA.id,copyPlanText:true})
+  const splitRace=await Promise.all([write(phone,revision,splitMorning),write(desktop,revision,command('saveSchedule',{...morningMerged,date:'2026-10-22'}))])
+  assert.equal(splitRace.filter(r=>!r.error).length,1)
+  assert.equal(splitRace.find(r=>r.error)?.error?.message,'REVISION_CONFLICT');revision++
+  if(splitRace[0].error) {assert.equal((await write(phone,revision++,splitMorning)).error,null)}
+  const splitRows=(await snapshot(phone)).schedules
+  assert.equal(splitRows.length,2);assert.equal(splitRows.reduce((n:number,s:{startMinute:number;endMinute:number})=>n+s.endMinute-s.startMinute,0),120)
+  assert.ok(splitRows.every((s:{note:string})=>s.note===morningMerged.note))
+  // Explicit old-version split cannot be silently replayed on a new revision.
+  assert.equal((await write(desktop,revision-1,splitMorning)).error?.message,'REVISION_CONFLICT')
+  for(const patch of [{slotIds:[4,5],startMinute:660,endMinute:840},{slotIds:[8,9],startMinute:960,endMinute:1200},{slotIds:[2,2]}]) assert.ok((await write(phone,revision,command('saveSchedule',{...morningMerged,...patch}))).error)
+  const nightIds=[randomUUID(),randomUUID(),randomUUID()]
+  const nights=nightIds.map((id,i)=>({...morningA,id,date:'2026-10-23',slotIds:[9+i],startMinute:[1110,1200,1260][i],endMinute:[1200,1260,1320][i]}))
+  for(const value of nights) assert.equal((await write(phone,revision++,command('saveSchedule',value))).error,null)
+  const nightMerged={...nights[0],slotIds:[9,10,11],endMinute:1320}
+  const nightMerge=command('mergeSchedules',{ids:nightIds,result:nightMerged,contentConfirmed:true})
+  // Merge versus removal competes under the account lock and cannot partially finish.
+  const race=await Promise.all([write(phone,revision,nightMerge),write(desktop,revision,command('removeSchedule',{id:nightIds[2]}))])
+  assert.equal(race.filter(r=>!r.error).length,1);assert.equal(race.find(r=>r.error)?.error?.message,'REVISION_CONFLICT');revision++
+  if(race[0].error) {
+    assert.equal((await write(phone,revision++,command('saveSchedule',nights[2]))).error,null)
+    assert.equal((await write(phone,revision++,nightMerge)).error,null)
+  }
+  const night=(await snapshot(phone)).schedules.find((s:{id:string})=>s.id===nightIds[0]);assert.equal(night.endMinute-night.startMinute,210)
+  const splitId=randomUUID(),splitNight=command('splitSchedule',{id:night.id,copyPlanText:false});loseResponse=true
+  assert.ok((await write(phone,revision,splitNight,splitId)).error)
+  assert.equal((await write(desktop,revision,splitNight,splitId)).error,null);revision++
+  assert.equal((await snapshot(phone)).schedules.filter((s:{date:string})=>s.date==='2026-10-23').length,3)
+  assert.equal((await write(desktop,revision-1,command('splitSchedule',{id:night.id,copyPlanText:true}),splitId)).error?.message,'REQUEST_REUSED')
+  const nightParts=(await snapshot(phone)).schedules.filter((s:{date:string})=>s.date==='2026-10-23')
+  assert.equal((await write(phone,revision++,command('mergeSchedules',{ids:nightParts.map((s:{id:string})=>s.id),result:nightMerged,contentConfirmed:true}))).error,null)
+  const beforeSlotRestore=await snapshot(phone)
+  const slotBackup={categories:beforeSlotRestore.categories,tasks:beforeSlotRestore.tasks,schedules:beforeSlotRestore.schedules,settings:beforeSlotRestore.settings}
+  const invalidRestoreId=randomUUID()
+  assert.ok((await write(phone,revision,command('restore',{...slotBackup,schedules:[...slotBackup.schedules,{...slotBackup.schedules[0],id:randomUUID()}]}),invalidRestoreId)).error)
+  assert.deepEqual(await snapshot(phone),beforeSlotRestore);assert.equal((await phone.rpc('planner_receipt',{p_request_id:invalidRestoreId})).data,null)
+  const restoreSlotsId=randomUUID(),restoreSlots=command('restore',slotBackup)
+  assert.equal((await write(phone,revision,restoreSlots,restoreSlotsId)).error,null)
+  assert.equal((await write(desktop,revision,restoreSlots,restoreSlotsId)).error,null);revision++
+  // Valid v2 migration output preserves original 105-minute snapshots; derived occupancy rebuilds.
+  const historical={...slotBackup.schedules[0],slotTemplateVersion:1,slotIds:[9],startMinute:1110,endMinute:1215}
+  assert.equal((await write(phone,revision++,command('restore',{...slotBackup,schedules:[historical]}))).error,null)
+  assert.equal((await snapshot(desktop)).schedules[0].endMinute,1215)
+  assert.ok((await write(phone,revision,command('saveSchedule',{...morningA,id:randomUUID(),date:historical.date,slotIds:[10],startMinute:1200,endMinute:1260}))).error,'跨模板占用漏检')
+  assert.equal((await snapshot(phone)).tasks[0].initialCompletedUnits,'8')
+  console.log('通过：阶段 3 120/210 分钟、明确内容确认、真实合并/移除和拆分/移动并发、响应丢失合并/拆分幂等、旧版本、间隔拒绝、全部回滚、基础时段占位、完整恢复及 v2 迁移输出/跨模板重叠保护。')
   await phone.auth.signOut({scope:'local'})
   assert.ok((await phone.rpc('planner_snapshot')).error)
   await login(phone,env.SUPABASE_TEST_EMAIL_A,env.SUPABASE_TEST_PASSWORD_A)

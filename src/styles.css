@@ -104,3 +104,5 @@ button[aria-pressed=true] { color: #fff; background: #245d4c; }
 .calendar-slot:disabled { opacity: 1; cursor: default; color: #52625b; }
 .calendar-break { padding: .55rem 1rem; background: #f7f0e3; color: #735d33; font-size: .85rem; }
 @media (min-width: 1600px) { .calendar-grid.week { min-width: 100%; } }
+
+.calendar-slot[aria-pressed=true] { background: #245d4c; color: #fff; border-left-color: #153b30; }
