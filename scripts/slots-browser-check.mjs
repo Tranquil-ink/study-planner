@@ -23,15 +23,14 @@ export async function checkSlots({phone,desktop,saved,db,refresh}) {
   }
   const confirm=p.getByRole('button',{name:'确认合并到云端',exact:true})
   assert.equal(await confirm.isDisabled(),true)
-  for(const label of ['合并后的任务选择','合并后的计划范围选择','合并后的备注选择']) await p.getByLabel(label,{exact:true}).selectOption({label:'手动填写下方最终内容'})
-  await p.getByLabel('临时任务名称',{exact:true}).fill('明确选择的合并内容')
-  await p.getByLabel('计划学习范围',{exact:true}).fill('保留甲和乙')
-  await p.getByLabel('日程备注',{exact:true}).fill('明确保留两段备注')
+  await p.getByLabel('合并后保留哪个任务的内容',{exact:true}).selectOption({label:'10:00：第二项'})
+  assert.equal(await p.getByLabel('合并后的计划范围选择',{exact:true}).count(),0)
+  assert.equal(await p.getByLabel('合并后的备注选择',{exact:true}).count(),0)
   await p.getByLabel('我已明确选择并确认合并后的任务、计划范围和备注').check()
   const beforeOffline=(await db.query('select revision::int r from public.planner_dataset_state')).rows[0].r
   phone.mode('offline');await confirm.click()
   await p.getByRole('button',{name:'确认并重试原请求',exact:true}).waitFor()
-  assert.equal(await p.getByLabel('日程备注',{exact:true}).inputValue(),'明确保留两段备注')
+  assert.match(await p.getByRole('region',{name:'日程编辑表单',exact:true}).innerText(),/合并结果：第二项 · 范围：范围乙 · 备注：备注乙/)
   assert.equal((await db.query('select revision::int r from public.planner_dataset_state')).rows[0].r,beforeOffline)
   phone.mode('normal');await p.getByRole('button',{name:'确认并重试原请求',exact:true}).click();await saved(p);await refresh(d)
   assert.match(await slot(d,'09:00').innerText(),/120 分钟/)
@@ -43,7 +42,7 @@ export async function checkSlots({phone,desktop,saved,db,refresh}) {
   const revision=(await db.query('select revision::int r from public.planner_dataset_state')).rows[0].r
   await p.getByRole('button',{name:'确认并重试原请求',exact:true}).click();await saved(p)
   assert.equal((await db.query('select revision::int r from public.planner_dataset_state')).rows[0].r,revision)
-  assert.match(await slot(p,'10:00').innerText(),/保留甲和乙/)
+  assert.match(await slot(p,'10:00').innerText(),/范围乙/)
   await d.getByRole('button',{name:'保存日程到云端',exact:true}).click()
   await d.getByRole('alert').filter({hasText:'云端已有更新'}).waitFor();await cancel(d);await refresh(d)
   // Real-time gaps cannot be merged, even when slot numbers are adjacent.
@@ -71,13 +70,13 @@ export async function checkSlots({phone,desktop,saved,db,refresh}) {
   // Re-merge and backup full merged representation, restore through UI.
   await selectMerge(p,['18:30','20:00','21:00'])
   // Split with copy=false left text only in the first block, so explicitly choose all fields.
-  for(const label of ['合并后的任务选择','合并后的计划范围选择','合并后的备注选择']) await p.getByLabel(label,{exact:true}).selectOption({label:'手动填写下方最终内容'})
+  await p.getByLabel('合并后保留哪个任务的内容',{exact:true}).selectOption({label:'18:30：晚间计划'})
   await p.getByLabel('我已明确选择并确认合并后的任务、计划范围和备注').check();await confirm.click();await saved(p)
   await p.getByRole('link',{name:'数据设置',exact:true}).click()
   const download=p.waitForEvent('download');await p.getByRole('button',{name:'从云端导出完整 JSON',exact:true}).click()
   await (await download).saveAs('work/slots-backup.json')
   const backup=JSON.parse(await fs.readFile('work/slots-backup.json','utf8'))
-  assert.equal(backup.schemaVersion,3);assert.ok(backup.data.schedules.some(s=>s.slotIds.length===3&&s.endMinute-s.startMinute===210))
+  assert.equal(backup.schemaVersion,4);assert.ok(backup.data.schedules.some(s=>s.slotIds.length===3&&s.endMinute-s.startMinute===210))
   async function restore(path,heading) {
     await p.getByLabel('选择备份 / 本地数据迁移文件').setInputFiles(path)
     await p.getByRole('heading',{name:heading,exact:true}).waitFor()
@@ -85,17 +84,18 @@ export async function checkSlots({phone,desktop,saved,db,refresh}) {
     await p.getByRole('button',{name:'确认恢复到云端',exact:true}).click();await saved(p)
     await p.getByRole('button',{name:'取消预览',exact:true}).click()
   }
-  await restore('work/slots-backup.json','备份恢复预览（v3）')
+  await restore('work/slots-backup.json','备份恢复预览（v4）')
   // Valid stage-2 file, including old 105 minute historical snapshot; UI migration.
-  const old={...backup,schemaVersion:2,data:{...backup.data,schedules:[{...backup.data.schedules[0],date,slotTemplateVersion:1,slotIds:[9],startMinute:1110,endMinute:1215}]}}
+  const {workLogs:_logs,...oldData}=backup.data;void _logs
+  const old={...backup,schemaVersion:2,data:{...oldData,schedules:[{...backup.data.schedules[0],date,slotTemplateVersion:1,slotIds:[9],startMinute:1110,endMinute:1215}]}}
   old.data.schedules.push({...old.data.schedules[0],id:randomUUID(),slotIds:[10],startMinute:1215,endMinute:1320})
   await fs.writeFile('work/slots-v2.json',JSON.stringify(old))
-  await restore('work/slots-v2.json','旧格式迁移预览（v2 → v3）')
+  await restore('work/slots-v2.json','旧格式迁移预览（v2 → v4）')
   await refresh(d);assert.match(await slot(d,'18:30').innerText(),/105 分钟/)
   assert.match(await slot(d,'20:15').innerText(),/105 分钟/)
   const a=await slot(d,'18:30').boundingBox(),b=await slot(d,'20:15').boundingBox()
   assert.ok(a&&b&&a.y+a.height<=b.y,'历史晚间卡片不能遮挡重叠')
-  await restore('work/slots-backup.json','备份恢复预览（v3）')
+  await restore('work/slots-backup.json','备份恢复预览（v4）')
   await p.getByRole('link',{name:'日历',exact:true}).click();await refresh(d)
   for(const width of [320,360,430,1280]) {
     await p.setViewportSize({width,height:900})
@@ -104,5 +104,5 @@ export async function checkSlots({phone,desktop,saved,db,refresh}) {
   await p.setViewportSize({width:360,height:900});await p.screenshot({path:'work/slots-mobile.png',fullPage:true})
   await d.screenshot({path:'work/slots-desktop.png',fullPage:true})
   assert.equal((await db.query('select initial_completed_units::text n from public.planner_tasks')).rows[0].n,'8')
-  console.log('PASS stage-3 browser simulation: explicit three-field content selection, 120 merge/split conservation, 210 evening, lunch rejection, split/merge lost-response receipt retry, stale split/move conflict with retained input, v3 merged backup restore and v2 historical migration UI, mobile/desktop layouts. NOT real Supabase/Android.')
+  console.log('PASS stage-3 browser simulation: single-source task/range/note selection, 120 merge/split conservation, 210 evening, lunch rejection, split/merge lost-response receipt retry, stale split/move conflict with retained input, v4 merged backup restore and v2 historical migration UI, mobile/desktop layouts. NOT real Supabase/Android.')
 }

@@ -3,7 +3,7 @@ import { parseBackup, type Backup } from '../../data/backup'
 import { messageOf } from '../../data/errors'
 import type { Snapshot } from '../../domain/model'
 import type { Repository } from '../../data/repository'
-interface Preview { backup: Backup; base: number; migrated: boolean; sourceVersion: number; categories: number; tasks: number; schedules: number }
+interface Preview { backup: Backup; base: number; migrated: boolean; sourceVersion: number; categories: number; tasks: number; schedules: number; workLogs: number }
 export function BackupPanel({ repository, snapshot, disabled, refresh, restore, onError }: {
   repository: Repository; snapshot: Snapshot; disabled: boolean;
   refresh: () => Promise<Snapshot | null>; restore: (backup: Backup, base: number) => void; onError: (error: unknown) => void
@@ -39,12 +39,12 @@ export function BackupPanel({ repository, snapshot, disabled, refresh, restore, 
       const current = await refresh()
       if (!alive.current) return
       if (!current) throw new Error('无法读取当前云端数据，尚未完成预检')
-      setPreview({ ...parsed, base: current.revision, categories: current.categories.length, tasks: current.tasks.length, schedules: current.schedules.length })
+      setPreview({ ...parsed, base: current.revision, categories: current.categories.length, tasks: current.tasks.length, schedules: current.schedules.length, workLogs: current.workLogs.length })
     } catch (e) { if (alive.current) { setError(messageOf(e)); onError(e) } } finally { if (alive.current) setBusy(false) }
   }
   return <section className="panel">
     <h2>完整备份与恢复</h2>
-    <p>导出从云端获取全部分类、任务（含归档）、日程与时间快照和设置。文件含个人数据，请妥善保存。</p>
+    <p>导出从云端获取全部分类、任务（含归档）、日程与时间快照、实际记录及创建顺序和设置。文件含个人数据，请妥善保存。</p>
     <button disabled={disabled || busy} onClick={() => { void exportFile() }}>从云端导出完整 JSON</button>
     <p>本页上次成功生成文件：{lastExport ? new Date(lastExport).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未生成'}</p>
     <p className="muted">浏览器不能确认文件是否最终存入下载目录。此时间仅在当前页面保留。</p>
@@ -53,10 +53,11 @@ export function BackupPanel({ repository, snapshot, disabled, refresh, restore, 
     {busy && <p role="status">正在读取并校验…</p>}
     {error && <p role="alert">{error}</p>}
     {preview && <div className="notice">
-      <h3>{preview.migrated ? `旧格式迁移预览（v${preview.sourceVersion} → v3）` : '备份恢复预览（v3）'}</h3>
-      <p>文件导出于 {preview.backup.exportedAt}；包含分类 {preview.backup.data.categories.length} 个、任务 {preview.backup.data.tasks.length} 个、日程 {preview.backup.data.schedules.length} 个、设置 1 份。</p>
-      <p>预检时云端有分类 {preview.categories} 个、任务 {preview.tasks} 个、日程 {preview.schedules} 个。恢复会完整替换当前账号的数据，建议先导出。</p>
+      <h3>{preview.migrated ? `旧格式迁移预览（v${preview.sourceVersion} → v4）` : '备份恢复预览（v4）'}</h3>
+      <p>文件导出于 {preview.backup.exportedAt}；包含分类 {preview.backup.data.categories.length} 个、任务 {preview.backup.data.tasks.length} 个、日程 {preview.backup.data.schedules.length} 个、实际记录 {preview.backup.data.workLogs.length} 条、设置 1 份。</p>
+      <p>预检时云端有分类 {preview.categories} 个、任务 {preview.tasks} 个、日程 {preview.schedules} 个、实际记录 {preview.workLogs} 条。恢复会完整替换当前账号的数据，建议先导出。</p>
       {preview.sourceVersion < 2 && <p>旧备份没有日程，迁移后日程为 0 项。完整替换将移除当前已有日程，请先备份。</p>}
+      {preview.sourceVersion < 4 && <p>旧备份没有实际记录。完整替换将清空当前全部实际记录，并按旧备份初始量重新计算进度，请先备份。</p>}
       <label className="check"><input type="checkbox" disabled={disabled} checked={checked} onChange={e => setChecked(e.target.checked)} />我确认替换当前账号全部业务数据与设置</label>
       {preview.base !== snapshot.revision && <p role="alert">云端版本已改变，请重新选择文件并预检。</p>}
       <button disabled={disabled || busy || !checked || preview.base !== snapshot.revision} onClick={() => restore(preview.backup, preview.base)}>确认恢复到云端</button>

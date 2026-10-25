@@ -24,7 +24,7 @@ export function TaskEditor({ editor, snapshot, disabled, onChange, onSave, onCan
           <label>初始位置文字<input value={editor.value.initialProgressLabel} maxLength={200} placeholder="例如 2.1.1" onChange={e => changeTask({ initialProgressLabel: e.target.value })} /></label>
           <div><label htmlFor="task-note">备注</label><textarea id="task-note" value={editor.value.note} maxLength={5000} onChange={e => changeTask({ note: e.target.value })} /></div>
           <label className="check"><input type="checkbox" checked={editor.value.archived} onChange={e => changeTask({ archived: e.target.checked })} />归档任务</label>
-          <p className="muted">当前阶段尚未开放实际记录；累计完成量等于初始量，不用于计算学习速度。小数最多 6 位。</p>
+          <p className="muted">累计完成量由初始量与实际记录相加得到。调整总量或初始量后仍须容纳全部实际进度；小数最多 6 位。</p>
         </>}
       </fieldset>
       {editor.base !== snapshot.revision && <div className="notice">
