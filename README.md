@@ -1,6 +1,6 @@
 # 学习日程规划器
 
-本次交付 **阶段 4：实际学习记录**，同时简化阶段 3 合并内容选择。基于阶段 3 PR #5 的实际合并结果 `3cf5b8d43e47e277d7ded6f29a9f755e0e491b21`，独立分支 `feat/stage-4-work-logs`。检查结果见 [CHECKS_STAGE4.md](docs/CHECKS_STAGE4.md)，双设备验收见 [ACCEPTANCE_STAGE4.md](docs/ACCEPTANCE_STAGE4.md)。阶段 5～7 未开始；本次不自动合并或部署。
+本次交付 **阶段 4：实际学习记录**，同时简化阶段 3 合并内容选择。基于阶段 3 PR #5 的实际合并结果 `3cf5b8d43e47e277d7ded6f29a9f755e0e491b21`，独立分支 `feat/stage-4-work-logs`。检查结果见 [CHECKS_STAGE4.md](docs/CHECKS_STAGE4.md)，双设备验收见 [ACCEPTANCE_STAGE4.md](docs/ACCEPTANCE_STAGE4.md)。2026-10-29 用户报告集成测试和真机验收通过，证据边界见检查记录；PR 由用户自行合并。阶段 5～7 未开始。
 
 阶段 2 核心双设备与真实 Supabase 集成已有用户报告通过，证据范围见 [阶段 2 历史记录](docs/CHECKS_STAGE2.md)。v1 备份完整界面迁移、自然会话过期及未完成安卓专项仍为未验证／暂缓；进入阶段 4 不自动改变这些状态。
 
