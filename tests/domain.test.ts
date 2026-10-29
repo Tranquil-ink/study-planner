@@ -22,7 +22,7 @@ describe('精确进度与备份边界', () => {
     const data = fixtureData()
     expect(datasetSchema.safeParse({ ...data, categories: [...data.categories, ...data.categories] }).success).toBe(false)
     expect(datasetSchema.safeParse({ ...data, categories: [] }).success).toBe(false)
-    expect(datasetSchema.safeParse({ ...data, workLogs: [] }).success).toBe(false)
+    expect(datasetSchema.safeParse({ ...data, periodPlans: [] }).success).toBe(false)
     expect(taskInputSchema.safeParse({ ...task, owner_id: 'forged' }).success).toBe(false)
   })
   it('拒绝无效 JSON、未来版本与无效时间', () => {

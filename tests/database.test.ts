@@ -1,3 +1,5 @@
+// Historical schema suite: adapt empty workLogs at the test boundary only.
+// The production snapshot parser requires v4; stage-4 migration tests use it directly.
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { PGlite } from '@electric-sql/pglite'
@@ -10,9 +12,9 @@ async function actor(id: string, role = 'authenticated') {
   await db.query("select set_config('request.jwt.claim.sub',$1,false)", [id])
   await db.exec(`set role ${role}`)
 }
-async function snapshot() { return (await db.query<{ value: unknown }>('select public.planner_snapshot() as value')).rows[0].value }
+async function snapshot() { return { ...(await db.query<{ value: Record<string, unknown> }>('select public.planner_snapshot() as value')).rows[0].value, workLogs: [] } }
 async function mutate(command: Command | unknown, rev: number, id = randomUUID()) {
-  return (await db.query<{ value: { revision: number; requestId: string } }>('select public.planner_mutate($1,$2,$3::jsonb) as value', [id, rev, JSON.stringify(command)])).rows[0].value
+  return (await db.query<{ value: { revision: number; requestId: string } }>('select public.planner_mutate($1,$2,$3::jsonb) as value', [id, rev, JSON.stringify(command, (key, value: unknown) => key === 'workLogs' ? undefined : value)])).rows[0].value
 }
 beforeAll(async () => {
   db = new PGlite()

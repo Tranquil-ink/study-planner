@@ -48,20 +48,46 @@ export const splitScheduleSchema = z.strictObject({ id: uuid, copyPlanText: z.bo
 export const removeScheduleSchema = z.strictObject({ id: uuid })
 export type ScheduleInput = z.infer<typeof scheduleInputSchema>
 export type ScheduleBlock = z.infer<typeof scheduleSchema>
+const workLogFields = {
+  id: uuid, date: z.string().refine(isBusinessDate, '日期不正确'), taskId: uuid.nullable(), scheduleBlockId: uuid.nullable(),
+  titleSnapshot: text(200), actualMinutes: z.number().int().min(1).max(2147483647),
+  progressDelta: quantitySchema.nullable(), progressLabel: z.string().max(200), note: z.string().max(5000),
+}
+const validLogProgress = (v: { taskId: string | null; progressDelta: string | null }) => (v.taskId === null) === (v.progressDelta === null)
+export const workLogInputSchema = z.strictObject(workLogFields).refine(validLogProgress, '长期任务须填写新增完成量；临时事项没有任务进度')
+export const workLogSchema = z.strictObject({ ...workLogFields, createdOrder: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER - 1), ...audit })
+  .refine(validLogProgress, '实际记录进度类型不正确').refine(v => Date.parse(v.updatedAt) >= Date.parse(v.createdAt), '修改时间早于创建时间')
+export type WorkLogInput = z.infer<typeof workLogInputSchema>
+export type WorkLog = z.infer<typeof workLogSchema>
 export const settingsSchema = z.strictObject({ timezone: z.literal('Asia/Shanghai'), dateFormat: z.literal('YYYY-MM-DD') })
-export const datasetSchema = z.strictObject({ categories: z.array(categorySchema), tasks: z.array(taskSchema), schedules: z.array(scheduleSchema), settings: settingsSchema }).superRefine((data, ctx) => {
-  for (const rows of [data.categories, data.tasks, data.schedules]) {
+export const datasetSchema = z.strictObject({ categories: z.array(categorySchema), tasks: z.array(taskSchema), schedules: z.array(scheduleSchema), workLogs: z.array(workLogSchema), settings: settingsSchema }).superRefine((data, ctx) => {
+  for (const rows of [data.categories, data.tasks, data.schedules, data.workLogs]) {
     if (new Set(rows.map(row => row.id)).size !== rows.length) ctx.addIssue({ code: 'custom', message: '存在重复 ID' })
   }
   const taskIds = new Set(data.tasks.map(t => t.id))
   if (data.schedules.some(s => s.taskId !== null && !taskIds.has(s.taskId))) ctx.addIssue({ code: 'custom', message: '日程引用的任务不存在' })
   const ordered = [...data.schedules].sort((a, b) => a.date.localeCompare(b.date) || a.startMinute - b.startMinute)
   if (ordered.some((s, i) => i > 0 && overlaps(ordered[i - 1], s))) ctx.addIssue({ code: 'custom', message: '同一天基础时段重复占用' })
+  if (new Set(data.workLogs.map(l => l.createdOrder)).size !== data.workLogs.length) ctx.addIssue({ code: 'custom', message: '实际记录创建顺序重复' })
+  for (const log of data.workLogs) {
+    if (log.taskId !== null && !taskIds.has(log.taskId)) ctx.addIssue({ code: 'custom', message: '实际记录引用的任务不存在' })
+    if (log.scheduleBlockId !== null) {
+      const schedule = data.schedules.find(s => s.id === log.scheduleBlockId)
+      if (!schedule || schedule.taskId !== log.taskId) ctx.addIssue({ code: 'custom', message: '实际记录关联日程不存在或任务不一致' })
+    }
+  }
+  for (const task of data.tasks) {
+    if (!quantitySchema.safeParse(task.initialCompletedUnits).success || (task.totalUnits !== null && !quantitySchema.safeParse(task.totalUnits).success)) continue
+    const deltas = data.workLogs.filter(l => l.taskId === task.id).map(l => l.progressDelta)
+    if (deltas.some(v => !quantitySchema.safeParse(v).success)) continue
+    const completed = deltas.reduce<bigint>((sum, v) => sum + quantityTicks(v!), quantityTicks(task.initialCompletedUnits))
+    if (task.totalUnits !== null && completed > quantityTicks(task.totalUnits)) ctx.addIssue({ code: 'custom', message: '初始量与实际记录累计进度超过任务总量' })
+  }
   const ids = new Set(data.categories.map(c => c.id))
   if (data.tasks.some(t => !ids.has(t.categoryId))) ctx.addIssue({ code: 'custom', message: '任务引用的分类不存在' })
 })
 export const revisionSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1)
-export const snapshotSchema = z.strictObject({ revision: revisionSchema, categories: z.array(categorySchema), tasks: z.array(taskSchema), schedules: z.array(scheduleSchema), settings: settingsSchema }).superRefine((s, ctx) => {
+export const snapshotSchema = z.strictObject({ revision: revisionSchema, categories: z.array(categorySchema), tasks: z.array(taskSchema), schedules: z.array(scheduleSchema), workLogs: z.array(workLogSchema), settings: settingsSchema }).superRefine((s, ctx) => {
   const result = datasetSchema.safeParse(businessData(s))
   if (!result.success) for (const issue of result.error.issues) ctx.addIssue({ code: 'custom', message: issue.message })
 })
@@ -73,12 +99,14 @@ export type LearningTask = z.infer<typeof taskSchema>
 export type Dataset = z.infer<typeof datasetSchema>
 export type Snapshot = z.infer<typeof snapshotSchema>
 export type Receipt = z.infer<typeof receiptSchema>
-export type Command = { type: 'mergeSchedules'; value: z.infer<typeof mergeSchedulesSchema> } | { type: 'splitSchedule'; value: z.infer<typeof splitScheduleSchema> } | { type: 'saveCategory'; value: CategoryInput } | { type: 'saveTask'; value: TaskInput } | { type: 'saveSchedule'; value: ScheduleInput } | { type: 'removeSchedule'; value: { id: string } } | { type: 'restore'; value: Dataset }
+export type Command = { type: 'saveWorkLog'; value: WorkLogInput } | { type: 'removeWorkLog'; value: { id: string } } | { type: 'mergeSchedules'; value: z.infer<typeof mergeSchedulesSchema> } | { type: 'splitSchedule'; value: z.infer<typeof splitScheduleSchema> } | { type: 'saveCategory'; value: CategoryInput } | { type: 'saveTask'; value: TaskInput } | { type: 'saveSchedule'; value: ScheduleInput } | { type: 'removeSchedule'; value: { id: string } } | { type: 'restore'; value: Dataset }
 export interface Operation { requestId: string; expectedRevision: number; command: Command }
 export function businessData(snapshot: Snapshot): Dataset {
-  return { categories: snapshot.categories, tasks: snapshot.tasks, schedules: snapshot.schedules, settings: snapshot.settings }
+  return { categories: snapshot.categories, tasks: snapshot.tasks, schedules: snapshot.schedules, workLogs: snapshot.workLogs, settings: snapshot.settings }
 }
 export function validateCommand(command: Command): Command {
+  if (command.type === 'saveWorkLog') return { ...command, value: workLogInputSchema.parse(command.value) }
+  if (command.type === 'removeWorkLog') return { ...command, value: removeScheduleSchema.parse(command.value) }
   if (command.type === 'mergeSchedules') return { ...command, value: mergeSchedulesSchema.parse(command.value) }
   if (command.type === 'splitSchedule') return { ...command, value: splitScheduleSchema.parse(command.value) }
   if (command.type === 'saveCategory') return { ...command, value: categoryInputSchema.parse(command.value) }

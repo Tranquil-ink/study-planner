@@ -1,3 +1,5 @@
+// Historical schema suite: adapt empty workLogs at the test boundary only.
+// The production snapshot parser requires v4; stage-4 migration tests use it directly.
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { PGlite } from '@electric-sql/pglite'
@@ -12,8 +14,8 @@ async function actor(id = ownerA, role = 'authenticated') {
   await db.query("select set_config('request.jwt.claim.sub',$1,false)", [id])
   await db.exec(`set role ${role}`)
 }
-async function snapshot() { return snapshotSchema.parse((await db.query<{value: unknown}>('select public.planner_snapshot() value')).rows[0].value) }
-async function write(command: unknown, revision: number, id = randomUUID()) { return (await db.query<{value: unknown}>('select public.planner_mutate($1,$2,$3::jsonb) value',[id,revision,JSON.stringify(command)])).rows[0].value }
+async function snapshot() { return snapshotSchema.parse({ ...(await db.query<{value: Record<string, unknown>}>('select public.planner_snapshot() value')).rows[0].value, workLogs: [] }) }
+async function write(command: unknown, revision: number, id = randomUUID()) { return (await db.query<{value: unknown}>('select public.planner_mutate($1,$2,$3::jsonb) value',[id,revision,JSON.stringify(command, (key, value: unknown) => key === 'workLogs' ? undefined : value)])).rows[0].value }
 async function mutate(command: unknown, id = randomUUID()) { return write(command,(await snapshot()).revision,id) }
 async function receipt(id: string) { return (await db.query<{value: unknown}>('select public.planner_receipt($1) value',[id])).rows[0].value }
 const base = { ...schedule, slotTemplateVersion: 2 as const }
@@ -105,7 +107,8 @@ describe('阶段 3 数据库约束与原子操作（本地 PostgreSQL）',()=>{
     const id=randomUUID(),cmd={type:'restore',value:backup.data},result=await write(cmd,before.revision,id)
     expect(await write(cmd,before.revision,id)).toEqual(result)
     await expect(write(cmd,before.revision)).rejects.toThrow('REVISION_CONFLICT')
-    const v2={...backup,schemaVersion:2,data:{...backup.data,schedules:[{...schedule,...audit,slotIds:[9],startMinute:1110,endMinute:1215}]}}
+    const { workLogs: _logs, ...v3Data } = backup.data; void _logs
+    const v2={...backup,schemaVersion:2,data:{...v3Data,schedules:[{...schedule,...audit,slotIds:[9],startMinute:1110,endMinute:1215}]}}
     const migrated=parseBackup(JSON.stringify(v2));expect(migrated.sourceVersion).toBe(2)
     await mutate({type:'restore',value:migrated.backup.data})
     expect((await snapshot()).schedules[0].endMinute).toBe(1215);expect(await occupancy()).toHaveLength(1)

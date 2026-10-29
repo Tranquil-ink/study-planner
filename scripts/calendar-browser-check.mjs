@@ -1,6 +1,7 @@
 // Called only by the local browser harness. No application mock storage exists.
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import { checkWorkLogs } from './work-logs-browser-check.mjs'
 import { checkSlots } from './slots-browser-check.mjs'
 export async function checkCalendar({ phone, desktop, saved, db }) {
   const p=phone.page,d=desktop.page
@@ -107,10 +108,10 @@ export async function checkCalendar({ phone, desktop, saved, db }) {
   await p.getByRole('button',{name:'从云端导出完整 JSON',exact:true}).click()
   await (await downloadPromise).saveAs('work/calendar-backup.json')
   const backup=JSON.parse(await fs.readFile('work/calendar-backup.json','utf8'))
-  assert.equal(backup.schemaVersion,3);assert.equal(backup.data.schedules.length,4)
+  assert.equal(backup.schemaVersion,4);assert.equal(backup.data.schedules.length,4)
   assert.ok(backup.data.schedules.some(s=>s.startMinute===1110&&s.endMinute===1200))
   await p.getByLabel('选择备份 / 本地数据迁移文件').setInputFiles('work/calendar-backup.json')
-  await p.getByRole('heading',{name:'备份恢复预览（v3）',exact:true}).waitFor()
+  await p.getByRole('heading',{name:'备份恢复预览（v4）',exact:true}).waitFor()
   await p.getByLabel('我确认替换当前账号全部业务数据与设置').check()
   await p.getByRole('button',{name:'确认恢复到云端',exact:true}).click();await saved(p)
   await d.getByRole('button',{name:'保存日程到云端',exact:true}).click()
@@ -142,5 +143,6 @@ export async function checkCalendar({ phone, desktop, saved, db }) {
   assert.match(await p.getByRole('region',{name:'日历排程',exact:true}).innerText(),/周预算：未设置/)
   console.log('PASS stage-2 browser simulation: mobile day/desktop week, 11 slots/breaks, task and report, bidirectional refresh/edit, competition, stale forms/rebase, offline draft/failed read, lost response idempotence, removal, JSON snapshots/atomic restore and stale form, leap date/navigation, preserved editor across views/pages, 320/360/430/1280 no page overflow, editor 44px controls. NOT real Supabase or Android.')
   await checkSlots({phone,desktop,saved,db,refresh})
+  await checkWorkLogs({phone,desktop,saved,db,refresh})
   await p.getByRole('link',{name:'任务池',exact:true}).click()
 }
