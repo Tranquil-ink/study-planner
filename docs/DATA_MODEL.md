@@ -90,3 +90,25 @@ createdOrder 由账号状态内的 `work_log_order` 在首次创建事务中递�
 已有实际关联的日程在 RPC 中禁止合并／拆分。移动只改变计划日期；更换任务或删除日程由触发器原子解除实际关联，实际记录的任务、日期、投入、进度、位置与创建顺序保留。相关实际行仅更新关联与审计时间。完整恢复先删除本账号实际记录，再替换日程、任务、分类，最后按原序恢复实际，避免触发器改写待恢复数据。
 
 v4 严格校验实际记录 ID／创建顺序唯一、引用、日期、类型和全部累计进度。恢复失败连同旧数据、占位、计数器、revision 和成功回执一起回滚。v3/v2/v1/v0 均没有实际记录，迁移补 `workLogs: []`，预检显示文件／当前实际条数并明确警告会清空现有记录。伪装旧格式夹带新实体会被拒绝。原备份不修改，来源版本可查。
+
+## 阶段 5A（v5）：待办、周目标与容量历史
+
+`202611010001_stage5a.sql` 在阶段4之上新增：
+
+| 实体 | 持久数据与约束 |
+| --- | --- |
+| `planner_todos` | owner/id 复合主键，名称、可空预计分钟、备注、归档、服务器审计时间；无执行周亦可保存 |
+| `planner_week_plans` | owner/week_start 复合主键；每周一行 document，周一日期、可用时段快照、entries、confirmedAt、initialEntries、history、创建/更新时间 |
+| `planner_availability_templates` | 每账号一行，常规周可用区间数组；未设置时快照返回空数组 |
+
+周条目是周聚合内有稳定 UUID 的值实体：taskId/todoId 恰有一个、titleSnapshot、goalType（progress/time/todo）、正整数 estimatedMinutes、可空精确 targetUnits、unitName、importance、可空 deadline、carryToNextWeek、cancelled。同周同任务唯一，不能用另一个 ID 重复添加；同一 entry ID 不能改指向其他实体。进度型要求正数 targetUnits；投入型的 targetUnits 仅参照；一次性条目不得带数值进度。所有估时/投入分钟最大 2147483647。
+
+可用区间 `{day:0..6,startMinute:0..1439,endMinute:1..1440}` 使用周一起算和真实分钟，不绑定会变动的时段模板 ID。结束大于开始，最多1000段；显示和容量计算先合并重叠／相邻区间。同周最多1000条目，数据不按计量单位相加。已排/实际仍分别从日程和实际记录派生，区间外安排不扩容。
+
+`saveTodo`、`saveWeekPlan`、`saveAvailabilityTemplate` 扩展现有 Command／Repository。写操作只能经过 `planner_mutate`；账号锁、expectedRevision、requestId/hash/回执机制相同。新表 RLS 只允许本人读，普通角色无直接写权限；私有函数无 PUBLIC/anon/authenticated 执行权。周 JSON 内引用由 owner-scoped 事务校验承担等价外键约束：保存、恢复及修改任务后检查全部当前／初始／历史引用与单位，不允许跨账号引用或改变已有计划所用单位。
+
+`saveWeekPlan` 只接收 weekStart/availability/entries/confirm，不接受初始目标、时间戳或历史字段。服务器首次确认时复制 entries 至 initialEntries；以后不重设基线，每次保存追加完整目标与容量版本。已保存条目只能取消，不能删除或换身份；允许恢复取消状态。历史从创建到最近保存按时间非递减，末条必须与当前 entries/availability 相同，初始目标必须对应确认时间的版本。业务历史时间在恢复时保留，以免损坏初始参照；其他行审计时间依旧由服务器重建。空周可作为明确的零目标计划确认。
+
+完整 Dataset/Snapshot 新增 `todos`、`weekPlans`、`availabilityTemplate` 三个必填集合；不能让旧客户端静默忽略新内容。快照在账号锁内读取所有集合。v5备份包括所有三项、完整初始与调整历史，无owner/token/内部回执。恢复先解析严格格式，再在同一事务内删除并重建当前账号的全部数据；任何引用、重复、历史、时段或进度错误回滚整笔事务。v4保留全部已有事实并补空规划；v0～v3沿用各自旧格式检查再补空规划，拒绝在旧格式中夹带未来字段。恢复旧备份明确警告会清空规划及其历史。
+
+迁移保留旧业务数据与去重回执，每个已有账号 revision +1。私有 `snapshot_v4` 仅供新公开快照包装调用，无客户端访问权限；不存在旧写入旁路。5A不建立周期模型、不向日程/实际补造周条目引用，也不推导目标完成率。

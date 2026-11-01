@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type ComponentProps } from 'react'
+import { unionAvailability, weekSummary } from '../../domain/planning'
 import { addDays, clockTime, dateLabel, isBusinessDate, plannedMinutes, slotsFor, SLOT_TEMPLATE_VERSION, today, weekDates } from '../../domain/calendar'
 import { WorkLogs } from '../work-logs/WorkLogs'
 import type { ScheduleBlock, ScheduleInput, Snapshot } from '../../domain/model'
@@ -24,6 +25,9 @@ export function Calendar({ snapshot, editor, disabled, edit, save, remove, split
   const [view, setView] = useState<'day' | 'week'>(() => window.matchMedia('(max-width: 760px)').matches ? 'day' : 'week')
   const dates = view === 'day' ? [date] : weekDates(date)
   const week = weekDates(date)
+  const weekPlan = snapshot.weekPlans.find(w => w.weekStart === week[0])
+  const available = unionAvailability(weekPlan?.availability ?? snapshot.availabilityTemplate)
+  const capacity = weekSummary(snapshot, week[0], available, weekPlan?.entries ?? [])
   const weekly = snapshot.schedules.filter(s => week.includes(s.date))
   const summaries = new Map<string, { title: string; minutes: number; actual: number }>()
   for (const task of snapshot.tasks) {
@@ -134,13 +138,15 @@ export function Calendar({ snapshot, editor, disabled, edit, save, remove, split
             const task = snapshot.tasks.find(t => t.id === block?.taskId)
             const category = snapshot.categories.find(c => c.id === task?.categoryId)
             const title = task?.title ?? block?.title
-            return <button className={`calendar-slot ${block ? 'occupied' : ''}`} key={d} aria-pressed={selecting ? !!block && selected.includes(block.id) : undefined} disabled={disabled || !!editor || (selecting && !block)} aria-label={`${d} ${clockTime(slot.startMinute)} ${block ? `编辑 ${title}` : '安排日程'}`} style={{ borderLeftColor: category?.color, gridColumn: column + 2, gridRow: `${gridRow(index)} / span ${span}` }} onClick={() => { if (selecting && block) { setSelected(selected.includes(block.id) ? selected.filter(id => id !== block.id) : [...selected, block.id]); return } edit({ base: snapshot.revision, existing: !!block, value: block ? { id: block.id, date: block.date, slotTemplateVersion: block.slotTemplateVersion, slotIds: block.slotIds, startMinute: block.startMinute, endMinute: block.endMinute, taskId: block.taskId, title: block.title, plannedRangeText: block.plannedRangeText, note: block.note } : { id: crypto.randomUUID(), date: d, slotTemplateVersion: template as 1 | 2, slotIds: [baseSlot.id], startMinute: baseSlot.startMinute, endMinute: baseSlot.endMinute, taskId: null, title: '', plannedRangeText: '', note: '' } }); setCopyPlanText(false) }}>
+            const availableMinutes = available.filter(s => s.day === week.indexOf(d)).reduce((n, s) => n + Math.max(0, Math.min(s.endMinute, block?.endMinute ?? slot.endMinute) - Math.max(s.startMinute, block?.startMinute ?? slot.startMinute)), 0)
+            return <button className={`calendar-slot ${block ? 'occupied' : ''} ${availableMinutes > 0 ? 'available' : ''}`} key={d} aria-pressed={selecting ? !!block && selected.includes(block.id) : undefined} disabled={disabled || !!editor || (selecting && !block)} aria-label={`${d} ${clockTime(slot.startMinute)} ${block ? `编辑 ${title}` : '安排日程'}`} style={{ borderLeftColor: category?.color, gridColumn: column + 2, gridRow: `${gridRow(index)} / span ${span}` }} onClick={() => { if (selecting && block) { setSelected(selected.includes(block.id) ? selected.filter(id => id !== block.id) : [...selected, block.id]); return } edit({ base: snapshot.revision, existing: !!block, value: block ? { id: block.id, date: block.date, slotTemplateVersion: block.slotTemplateVersion, slotIds: block.slotIds, startMinute: block.startMinute, endMinute: block.endMinute, taskId: block.taskId, title: block.title, plannedRangeText: block.plannedRangeText, note: block.note } : { id: crypto.randomUUID(), date: d, slotTemplateVersion: template as 1 | 2, slotIds: [baseSlot.id], startMinute: baseSlot.startMinute, endMinute: baseSlot.endMinute, taskId: null, title: '', plannedRangeText: '', note: '' } }); setCopyPlanText(false) }}>
+              {availableMinutes > 0 && <small>可用 {availableMinutes} 分钟{!weekPlan && '（模板预览）'}</small>}
               {block ? <><strong>{title}</strong><span>{category?.name ?? '临时任务'}{task?.archived ? ' · 已归档' : ''}</span><span>{block.plannedRangeText || '未填写范围'}</span><span>{clockTime(block.startMinute)}–{clockTime(block.endMinute)} · 计划 {plannedMinutes(block)} 分钟{block.slotIds.length > 1 ? '（合并安排）' : ''}</span><small>{snapshot.workLogs.some(l => l.scheduleBlockId === block.id) ? `已有实际记录 · ${snapshot.workLogs.filter(l => l.scheduleBlockId === block.id).reduce((sum, l) => sum + l.actualMinutes, 0)} 分钟` : '未记录实际学习'}</small></> : <span>＋ 安排</span>}
             </button>
           })}
         </Fragment>)}
       </div>
     </div>
-    <section className="panel"><h2>本周安排</h2><p>{week[0]} ～ {week.at(-1)} · 已排 {weekly.reduce((sum, s) => sum + plannedMinutes(s), 0)} 分钟</p><p>周预算：未设置 · 实际投入：{actualWeek.reduce((sum, l) => sum + l.actualMinutes, 0)} 分钟</p>{[...summaries].map(([id, row]) => <p key={id}>{row.title} · 周预算：未设置 / 已排：{row.minutes} 分钟 / 实际：{row.actual} 分钟</p>)}</section>
+    <section className="panel"><h2>本周安排</h2><p>可用时间：{capacity.capacity} 分钟{!weekPlan && '（模板预览，尚未保存）'} · 额外安排：{capacity.extra} 分钟</p><a href="#todos">选择本周重点与可用时间</a><p>{week[0]} ～ {week.at(-1)} · 已排 {weekly.reduce((sum, s) => sum + plannedMinutes(s), 0)} 分钟</p><p>周预算：{weekPlan ? `${capacity.planned} 分钟` : '未设置'} · 实际投入：{actualWeek.reduce((sum, l) => sum + l.actualMinutes, 0)} 分钟</p>{[...summaries].map(([id, row]) => <p key={id}>{row.title} · 周预算：{weekPlan?.entries.some(e => e.taskId === id && !e.cancelled) ? `${weekPlan.entries.find(e => e.taskId === id && !e.cancelled)!.estimatedMinutes} 分钟` : '未设置'} / 已排：{row.minutes} 分钟 / 实际：{row.actual} 分钟</p>)}</section>
   </section>
 }

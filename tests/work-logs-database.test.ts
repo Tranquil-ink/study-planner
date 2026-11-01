@@ -1,3 +1,4 @@
+import { withoutPlanning } from './fixtures'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { PGlite } from '@electric-sql/pglite'
@@ -14,8 +15,8 @@ async function actor(id = ownerA, role = 'authenticated') {
   await db.query("select set_config('request.jwt.claim.sub',$1,false)", [id])
   await db.exec(`set role ${role}`)
 }
-async function snapshot() { return snapshotSchema.parse((await db.query<{ value: unknown }>('select public.planner_snapshot() value')).rows[0].value) }
-async function write(command: unknown, revision: number, id = randomUUID()) { return (await db.query<{ value: unknown }>('select public.planner_mutate($1,$2,$3::jsonb) value', [id, revision, JSON.stringify(command)])).rows[0].value }
+async function snapshot() { return snapshotSchema.parse({ todos: [], weekPlans: [], availabilityTemplate: [], ...(await db.query<{ value: object }>('select public.planner_snapshot() value')).rows[0].value }) }
+async function write(command: unknown, revision: number, id = randomUUID()) { return (await db.query<{ value: unknown }>('select public.planner_mutate($1,$2,$3::jsonb) value', [id, revision, JSON.stringify(command, (key, value: unknown) => ['todos', 'weekPlans', 'availabilityTemplate'].includes(key) ? undefined : value)])).rows[0].value }
 async function mutate(command: unknown) { return write(command, (await snapshot()).revision) }
 async function receipt(id: string) { return (await db.query<{ value: unknown }>('select public.planner_receipt($1) value', [id])).rows[0].value }
 const log: WorkLogInput = { id: randomUUID(), date: schedule.date, taskId: task.id, scheduleBlockId: schedule.id, titleSnapshot: task.title, actualMinutes: 80, progressDelta: '1.5', progressLabel: '2.2', note: '' }
@@ -46,7 +47,7 @@ afterAll(async () => { await db?.close() })
 describe('阶段 4 PostgreSQL 事务与权限（本地引擎，非真实 Supabase）', () => {
   it('升级不改历史业务/时间/回执，revision +1 并添加空实际记录', async () => {
     const current = await snapshot()
-    expect({ ...current, revision: 3, workLogs: undefined }).toEqual({ ...beforeUpgrade as object, workLogs: undefined })
+    expect({ ...current, revision: 3, workLogs: undefined }).toEqual({ ...beforeUpgrade as object, todos: [], weekPlans: [], availabilityTemplate: [], workLogs: undefined })
     expect(current.revision).toBe(4); expect(current.workLogs).toEqual([])
     expect(await write({ type: 'saveCategory', value: category }, 0, oldRequest)).toEqual({ requestId: oldRequest, revision: 1 })
     await expect(write({ type: 'saveTask', value: task }, 3)).rejects.toThrow('REVISION_CONFLICT')
@@ -108,7 +109,7 @@ describe('阶段 4 PostgreSQL 事务与权限（本地引擎，非真实 Supabas
     const result = await write(cmd, before.revision, id); expect(await write(cmd, before.revision, id)).toEqual(result)
     expect((await snapshot()).workLogs.map(l => [l.id, l.createdOrder, l.progressDelta, l.scheduleBlockId])).toEqual(before.workLogs.map(l => [l.id, l.createdOrder, l.progressDelta, l.scheduleBlockId]))
     await expect(write(cmd, before.revision)).rejects.toThrow('REVISION_CONFLICT')
-    const { workLogs, ...old } = backup.data
+    const { workLogs, ...old } = withoutPlanning(backup.data)
     const migrated = parseBackup(JSON.stringify({ ...backup, schemaVersion: 3, data: old }))
     await mutate({ type: 'restore', value: migrated.backup.data }); expect((await snapshot()).workLogs).toEqual([])
     await mutate({ type: 'saveWorkLog', value: { ...log, scheduleBlockId: null } })

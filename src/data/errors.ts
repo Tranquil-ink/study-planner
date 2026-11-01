@@ -7,6 +7,10 @@ export function dataError(error: unknown, writing = false): DataError {
   const e = error as { code?: string; message?: string; status?: number } | null
   if (e?.code === 'REVISION_CONFLICT' || e?.message === 'REVISION_CONFLICT') return new DataError('conflict', '云端已有更新。请获取最新数据，核对后重新应用修改。')
   if (e?.message === 'SLOT_OCCUPIED' || (e?.code === '23505' && /planner_(schedules_occupied|schedule_slots|schedule_cells)/.test(e.message ?? ''))) return new DataError('conflict', '该日期的基础时段已被占用。请获取最新数据后选择空闲时段。')
+  if (e?.message === 'PLAN_REFERENCE') return new DataError('validation', '周计划引用的任务或待办不存在，或进度单位与历史计划不一致。请核对后保存。')
+  if (e?.message === 'PLAN_IDENTITY') return new DataError('validation', '已保存的周条目须保留任务身份；请取消原条目，不要删除或替换其任务。')
+  if (e?.message === 'PLAN_ALREADY_CONFIRMED') return new DataError('conflict', '此周已经确认初始计划，请获取最新数据后作为调整保存。')
+  if (e?.message === 'PLAN_HISTORY') return new DataError('validation', '周计划初始版本与调整历史不一致，无法恢复。')
   if (e?.message === 'SCHEDULE_MISSING') return new DataError('conflict', '此日程已被移除，请获取最新数据并核对。')
   if (e?.message === 'PROGRESS_LIMIT') return new DataError('validation', '初始量与全部实际记录的累计进度超过任务总量，请核对后再保存。')
   if (e?.message === 'SCHEDULE_HAS_LOGS') return new DataError('validation', '此日程已有实际记录，不能合并或拆分；仍可修改实际记录。')

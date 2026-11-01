@@ -106,3 +106,15 @@ button[aria-pressed=true] { color: #fff; background: #245d4c; }
 @media (min-width: 1600px) { .calendar-grid.week { min-width: 100%; } }
 
 .calendar-slot[aria-pressed=true] { background: #245d4c; color: #fff; border-left-color: #153b30; }
+
+.planning-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.planning-metrics p { background: #edf4f0; padding: .75rem; border-radius: .5rem; }
+.availability-picker details { margin: .75rem 0; }
+.availability-picker summary, section[aria-label="待办与周计划"] summary { min-height: 44px; padding: .5rem; cursor: pointer; }
+.availability-slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .3rem; }
+section[aria-label="待办与周计划"] li { margin-bottom: .6rem; overflow-wrap: anywhere; }
+@media (min-width: 800px) { .planning-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+.calendar-slot.available { background-color: #e4f2e9; box-shadow: inset 0 3px 0 #64a37b; }
+.calendar-slot.available.occupied { background-color: #f1f8f2; }
+.calendar-slot.available[aria-pressed=true] { background-color: #245d4c; color: #fff; }

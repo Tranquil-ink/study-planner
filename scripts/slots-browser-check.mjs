@@ -76,7 +76,7 @@ export async function checkSlots({phone,desktop,saved,db,refresh}) {
   const download=p.waitForEvent('download');await p.getByRole('button',{name:'从云端导出完整 JSON',exact:true}).click()
   await (await download).saveAs('work/slots-backup.json')
   const backup=JSON.parse(await fs.readFile('work/slots-backup.json','utf8'))
-  assert.equal(backup.schemaVersion,4);assert.ok(backup.data.schedules.some(s=>s.slotIds.length===3&&s.endMinute-s.startMinute===210))
+  assert.equal(backup.schemaVersion,5);assert.ok(backup.data.schedules.some(s=>s.slotIds.length===3&&s.endMinute-s.startMinute===210))
   async function restore(path,heading) {
     await p.getByLabel('选择备份 / 本地数据迁移文件').setInputFiles(path)
     await p.getByRole('heading',{name:heading,exact:true}).waitFor()
@@ -84,18 +84,18 @@ export async function checkSlots({phone,desktop,saved,db,refresh}) {
     await p.getByRole('button',{name:'确认恢复到云端',exact:true}).click();await saved(p)
     await p.getByRole('button',{name:'取消预览',exact:true}).click()
   }
-  await restore('work/slots-backup.json','备份恢复预览（v4）')
+  await restore('work/slots-backup.json','备份恢复预览（v5）')
   // Valid stage-2 file, including old 105 minute historical snapshot; UI migration.
-  const {workLogs:_logs,...oldData}=backup.data;void _logs
+  const {workLogs:_logs,todos:_t,weekPlans:_w,availabilityTemplate:_a,...oldData}=backup.data;void _logs;void _t;void _w;void _a
   const old={...backup,schemaVersion:2,data:{...oldData,schedules:[{...backup.data.schedules[0],date,slotTemplateVersion:1,slotIds:[9],startMinute:1110,endMinute:1215}]}}
   old.data.schedules.push({...old.data.schedules[0],id:randomUUID(),slotIds:[10],startMinute:1215,endMinute:1320})
   await fs.writeFile('work/slots-v2.json',JSON.stringify(old))
-  await restore('work/slots-v2.json','旧格式迁移预览（v2 → v4）')
+  await restore('work/slots-v2.json','旧格式迁移预览（v2 → v5）')
   await refresh(d);assert.match(await slot(d,'18:30').innerText(),/105 分钟/)
   assert.match(await slot(d,'20:15').innerText(),/105 分钟/)
   const a=await slot(d,'18:30').boundingBox(),b=await slot(d,'20:15').boundingBox()
   assert.ok(a&&b&&a.y+a.height<=b.y,'历史晚间卡片不能遮挡重叠')
-  await restore('work/slots-backup.json','备份恢复预览（v4）')
+  await restore('work/slots-backup.json','备份恢复预览（v5）')
   await p.getByRole('link',{name:'日历',exact:true}).click();await refresh(d)
   for(const width of [320,360,430,1280]) {
     await p.setViewportSize({width,height:900})

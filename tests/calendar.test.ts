@@ -1,3 +1,4 @@
+import { withoutPlanning } from './fixtures'
 import { describe, expect, it } from 'vitest'
 import { addDays, clockTime, isBusinessDate, plannedMinutes, SLOTS, LEGACY_SLOTS, validSlotSnapshot, today, weekDates, weekStart } from '../src/domain/calendar'
 import { datasetSchema, scheduleInputSchema } from '../src/domain/model'
@@ -39,7 +40,7 @@ describe('日程快照与备份升级', () => {
   it('v2 完整往返保留 UUID、引用、临时事项和时间快照，不改变初始进度', () => {
     const data = { ...fixtureData(), schedules: [{ ...schedule, ...audit },{ ...schedule, ...audit, id: '50000000-0000-4000-8000-000000000002', date: '2026-10-21', taskId: null, title: '临时报告' }] }
     const backup = createBackup({ ...data, revision: 5 })
-    expect(backup.schemaVersion).toBe(4)
+    expect(backup.schemaVersion).toBe(5)
     expect(parseBackup(JSON.stringify(backup)).backup.data).toEqual(data)
     expect(backup.data.tasks[0].initialCompletedUnits).toBe('8')
   })
@@ -73,7 +74,7 @@ describe('阶段 3 连续性和备份', () => {
     const merged={...schedule,...audit,slotTemplateVersion:2,slotIds:[9,10,11],startMinute:1110,endMinute:1320}
     expect(parseBackup(JSON.stringify({...backup,data:{...backup.data,schedules:[merged]}})).backup.data.schedules[0]).toEqual(merged)
     const old={...schedule,...audit,slotIds:[9],startMinute:1110,endMinute:1215}
-    const { workLogs: _logs, ...oldData } = backup.data; void _logs
+    const { workLogs: _logs, ...oldData } = withoutPlanning(backup.data); void _logs
     expect(()=>parseBackup(JSON.stringify({...backup,schemaVersion:2,data:{...oldData,schedules:[merged]}}))).toThrow('阶段 2 备份时段格式无效')
     expect(parseBackup(JSON.stringify({...backup,schemaVersion:3,data:{...oldData,schedules:[merged]}})).backup.data.schedules[0]).toEqual(merged)
     expect(parseBackup(JSON.stringify({...backup,schemaVersion:2,data:{...oldData,schedules:[old]}})).backup.data.schedules[0]).toEqual(old)

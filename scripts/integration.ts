@@ -43,7 +43,7 @@ async function snapshot(c: SupabaseClient) {
 }
 const command = (type:string,value:unknown) => ({type,value})
 const write = (c:SupabaseClient, revision:number, cmd:unknown, requestId=randomUUID()) => c.rpc('planner_mutate',{p_request_id:requestId,p_expected_revision:revision,p_command:cmd})
-const tables = ['categories','tasks','schedules','schedule_slots','schedule_cells','work_logs','settings','dataset_state','operation_receipts']
+const tables = ['categories','tasks','schedules','schedule_slots','schedule_cells','work_logs','todos','week_plans','availability_templates','settings','dataset_state','operation_receipts']
 let cleanupReady = false
 let initial: Awaited<ReturnType<typeof snapshot>>
 try {
@@ -53,8 +53,8 @@ try {
   assert.notEqual(userA,userB)
   initial = await snapshot(phone)
   const initialB = await snapshot(other)
-  assert.equal(initial.categories.length+initial.tasks.length+initial.schedules.length+initial.workLogs.length,0,'拒绝测试：A 账号非空')
-  assert.equal(initialB.categories.length+initialB.tasks.length+initialB.schedules.length+initialB.workLogs.length,0,'拒绝测试：B 账号非空')
+  assert.equal(initial.categories.length+initial.tasks.length+initial.schedules.length+initial.workLogs.length+initial.todos.length+initial.weekPlans.length+initial.availabilityTemplate.length,0,'拒绝测试：A 账号非空')
+  assert.equal(initialB.categories.length+initialB.tasks.length+initialB.schedules.length+initialB.workLogs.length+initialB.todos.length+initialB.weekPlans.length+initialB.availabilityTemplate.length,0,'拒绝测试：B 账号非空')
   cleanupReady = true
   let revision = initial.revision
   const category = {id:randomUUID(),name:'虚构集成测试分类',color:'#32796b',archived:false}
@@ -103,10 +103,10 @@ try {
   assert.ok((await write(phone,revision,command('saveTask',task))).error)
   offline = false
   assert.deepEqual(await snapshot(phone),beforeFailure)
-  const broken = {categories:[],tasks:beforeFailure.tasks,schedules:beforeFailure.schedules,workLogs:beforeFailure.workLogs,settings:beforeFailure.settings}
+  const broken = {todos:[],weekPlans:[],availabilityTemplate:[],categories:[],tasks:beforeFailure.tasks,schedules:beforeFailure.schedules,workLogs:beforeFailure.workLogs,settings:beforeFailure.settings}
   assert.ok((await write(phone,revision,command('restore',broken))).error)
   assert.deepEqual(await snapshot(phone),beforeFailure)
-  const restoreId = randomUUID(), restored = {categories:beforeFailure.categories,tasks:beforeFailure.tasks,schedules:beforeFailure.schedules,workLogs:beforeFailure.workLogs,settings:beforeFailure.settings}
+  const restoreId = randomUUID(), restored = {todos:[],weekPlans:[],availabilityTemplate:[],categories:beforeFailure.categories,tasks:beforeFailure.tasks,schedules:beforeFailure.schedules,workLogs:beforeFailure.workLogs,settings:beforeFailure.settings}
   assert.equal((await write(phone,revision,command('restore',restored),restoreId)).error,null)
   assert.equal((await write(phone,revision,command('restore',restored),restoreId)).error,null)
   assert.equal((await write(desktop,revision,command('saveTask',task))).error?.message,'REVISION_CONFLICT'); revision++
@@ -144,7 +144,7 @@ try {
   offline=false
   assert.deepEqual(await snapshot(phone),beforeScheduleFailure)
   console.log('通过：日程双向读写、响应丢失幂等、数据库重复占用、真实双会话竞争、临时 105 分钟、跨账号拒绝、非法日期/快照与断网；初始进度不变。')
-  const scheduleData={categories:beforeScheduleFailure.categories,tasks:beforeScheduleFailure.tasks,schedules:beforeScheduleFailure.schedules,workLogs:beforeScheduleFailure.workLogs,settings:beforeScheduleFailure.settings}
+  const scheduleData={todos:[],weekPlans:[],availabilityTemplate:[],categories:beforeScheduleFailure.categories,tasks:beforeScheduleFailure.tasks,schedules:beforeScheduleFailure.schedules,workLogs:beforeScheduleFailure.workLogs,settings:beforeScheduleFailure.settings}
   for(const schedules of [[{...beforeScheduleFailure.schedules[0],taskId:randomUUID()}],[beforeScheduleFailure.schedules[0],{...beforeScheduleFailure.schedules[0],id:randomUUID()}]]) {
     const failedId=randomUUID()
     assert.ok((await write(phone,revision,command('restore',{...scheduleData,schedules}),failedId)).error)
@@ -166,7 +166,7 @@ try {
   assert.equal((await write(phone,revision,deleteCommand,deleteId)).error,null);revision++
   assert.equal((await snapshot(desktop)).schedules.length,1)
   // Canonical output of validated v1 -> v2 migration (parser covered by unit tests).
-  const migratedStage1={categories:scheduleData.categories,tasks:scheduleData.tasks,settings:scheduleData.settings,schedules:[],workLogs:[]}
+  const migratedStage1={todos:[],weekPlans:[],availabilityTemplate:[],categories:scheduleData.categories,tasks:scheduleData.tasks,settings:scheduleData.settings,schedules:[],workLogs:[]}
   assert.equal((await write(phone,revision,command('restore',migratedStage1))).error,null);revision++
   assert.equal((await snapshot(desktop)).schedules.length,0)
   assert.equal((await snapshot(desktop)).tasks[0].initialCompletedUnits,'8')
@@ -223,7 +223,7 @@ try {
   const nightParts=(await snapshot(phone)).schedules.filter((s:{date:string})=>s.date==='2026-10-23')
   assert.equal((await write(phone,revision++,command('mergeSchedules',{ids:nightParts.map((s:{id:string})=>s.id),result:nightMerged,contentConfirmed:true}))).error,null)
   const beforeSlotRestore=await snapshot(phone)
-  const slotBackup={categories:beforeSlotRestore.categories,tasks:beforeSlotRestore.tasks,schedules:beforeSlotRestore.schedules,workLogs:beforeSlotRestore.workLogs,settings:beforeSlotRestore.settings}
+  const slotBackup={todos:[],weekPlans:[],availabilityTemplate:[],categories:beforeSlotRestore.categories,tasks:beforeSlotRestore.tasks,schedules:beforeSlotRestore.schedules,workLogs:beforeSlotRestore.workLogs,settings:beforeSlotRestore.settings}
   const invalidRestoreId=randomUUID()
   assert.ok((await write(phone,revision,command('restore',{...slotBackup,schedules:[...slotBackup.schedules,{...slotBackup.schedules[0],id:randomUUID()}]}),invalidRestoreId)).error)
   assert.deepEqual(await snapshot(phone),beforeSlotRestore);assert.equal((await phone.rpc('planner_receipt',{p_request_id:invalidRestoreId})).data,null)
@@ -302,6 +302,33 @@ try {
   assert.equal((await write(phone,revision++,command('restore',{...logData,workLogs:[]}))).error,null)
   assert.equal((await snapshot(desktop)).workLogs.length,0)
   console.log('通过：阶段 4 实际记录增改删与补记、零进度/临时事项、原请求响应丢失幂等、稳定创建顺序、真实超量竞争与刷新后拒绝、任务总量/初始量校验、实际关联保护、移日/换任务/移除保留实际、v4 恢复/回滚/旧表单及旧备份清空记录。')
+  const todo={id:randomUUID(),title:'虚构课程报告',estimatedMinutes:null,note:'',archived:false}
+  assert.equal((await write(phone,revision++,command('saveTodo',todo))).error,null)
+  const availability=[{day:0,startMinute:480,endMinute:720}]
+  assert.equal((await write(phone,revision++,command('saveAvailabilityTemplate',{availability}))).error,null)
+  const entry={id:randomUUID(),taskId:task.id,todoId:null,titleSnapshot:task.title,goalType:'progress',estimatedMinutes:240,targetUnits:'30',unitName:'节',importance:'important',deadline:null,carryToNextWeek:true,cancelled:false}
+  const week={weekStart:'2026-11-02',availability,entries:[entry],confirm:true}
+  const planRequest=randomUUID(),saveWeek=command('saveWeekPlan',week)
+  loseResponse=true
+  assert.ok((await write(phone,revision,saveWeek,planRequest)).error)
+  assert.equal((await write(desktop,revision,saveWeek,planRequest)).error,null);revision++
+  let plans=await snapshot(desktop)
+  assert.equal(plans.weekPlans[0].history.length,1);assert.equal(plans.todos[0].estimatedMinutes,null)
+  const competition=await Promise.all([write(phone,revision,command('saveWeekPlan',{...week,confirm:false,entries:[{...entry,targetUnits:'10'}]})),write(desktop,revision,command('saveWeekPlan',{...week,confirm:false,entries:[{...entry,targetUnits:'20'}]}))])
+  assert.equal(competition.filter(r=>!r.error).length,1);assert.equal(competition.find(r=>r.error)?.error?.message,'REVISION_CONFLICT');revision++
+  plans=await snapshot(phone);assert.equal(plans.weekPlans[0].initialEntries[0].targetUnits,'30');assert.equal(plans.weekPlans[0].history.length,2)
+  assert.equal((await write(phone,revision++,command('saveAvailabilityTemplate',{availability:[]}))).error,null)
+  assert.deepEqual((await snapshot(desktop)).weekPlans[0].availability,availability)
+  assert.equal((await write(other,initialB.revision,saveWeek)).error?.message,'PLAN_REFERENCE')
+  assert.ok((await write(phone,revision,command('saveTodo',{...todo,owner_id:userB}))).error)
+  assert.equal((await write(phone,revision,command('saveWeekPlan',{...week,weekStart:'2026-11-09',entries:[entry,{...entry,id:randomUUID()}]}))).error?.message,'DUPLICATE_ID')
+  const planSnapshot=await snapshot(phone),{revision:_planRev,...planData}=planSnapshot;void _planRev
+  assert.ok((await write(phone,revision,command('restore',{...planData,weekPlans:[{...planData.weekPlans[0],initialEntries:[]}]}))).error)
+  assert.deepEqual(await snapshot(desktop),planSnapshot)
+  assert.equal((await write(phone,revision++,command('restore',planData))).error,null)
+  assert.deepEqual((await snapshot(desktop)).weekPlans,planSnapshot.weekPlans)
+  assert.equal((await snapshot(desktop)).workLogs.length,0)
+  console.log('通过：阶段 5A 待估算待办、模板/周快照隔离、确认/调整基线、真实竞争、响应丢失幂等、跨账号引用/所有者拒绝、v5 完整恢复与损坏历史回滚。')
   await phone.auth.signOut({scope:'local'})
   assert.ok((await phone.rpc('planner_snapshot')).error)
   await login(phone,env.SUPABASE_TEST_EMAIL_A,env.SUPABASE_TEST_PASSWORD_A)
@@ -314,7 +341,7 @@ try {
   if (cleanupReady) {
     try {
       const latest = await snapshot(desktop)
-      const result = await write(desktop,latest.revision,command('restore',{categories:[],tasks:[],schedules:[],workLogs:[],settings:initial.settings}))
+      const result = await write(desktop,latest.revision,command('restore',{todos:[],weekPlans:[],availabilityTemplate:[],categories:[],tasks:[],schedules:[],workLogs:[],settings:initial.settings}))
       assert.equal(result.error,null)
       console.log('已清理 A 测试业务数据；内部递增版本与回执保留。')
     } catch { console.error('测试数据清理失败，请在测试项目内检查 A 账号。'); process.exitCode=1 }

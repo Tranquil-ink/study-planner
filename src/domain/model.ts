@@ -1,16 +1,9 @@
 import { z } from 'zod'
 import { isBusinessDate, overlaps, validSlotSnapshot } from './calendar'
 
-// Decimal strings round-trip to PostgreSQL numeric without IEEE-754 rounding.
-export const quantitySchema = z.string().regex(/^(0|[1-9]\d{0,8})(\.\d{1,6})?$/, '进度须为非负数，最多 9 位整数、6 位小数')
-export function quantityTicks(value: string): bigint {
-  quantitySchema.parse(value)
-  const [whole, fraction = ''] = value.split('.')
-  return BigInt(whole) * 1_000_000n + BigInt(fraction.padEnd(6, '0'))
-}
-export function displayQuantity(value: string): string {
-  return value.includes('.') ? value.replace(/0+$/, '').replace(/\.$/, '') : value
-}
+import { quantitySchema, quantityTicks } from './quantities'
+export { quantitySchema, quantityTicks, displayQuantity } from './quantities'
+import { planningFields, todoInputSchema, weekInputSchema, availabilitySchema, type TodoInput, type WeekInput, type Availability } from './planning-schema'
 const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'ID 格式不正确')
 const text = (max: number) => z.string().max(max).refine(v => v.trim().length > 0, '请填写内容')
 const audit = {
@@ -60,9 +53,16 @@ export const workLogSchema = z.strictObject({ ...workLogFields, createdOrder: z.
 export type WorkLogInput = z.infer<typeof workLogInputSchema>
 export type WorkLog = z.infer<typeof workLogSchema>
 export const settingsSchema = z.strictObject({ timezone: z.literal('Asia/Shanghai'), dateFormat: z.literal('YYYY-MM-DD') })
-export const datasetSchema = z.strictObject({ categories: z.array(categorySchema), tasks: z.array(taskSchema), schedules: z.array(scheduleSchema), workLogs: z.array(workLogSchema), settings: settingsSchema }).superRefine((data, ctx) => {
+export const datasetSchema = z.strictObject({ ...planningFields, categories: z.array(categorySchema), tasks: z.array(taskSchema), schedules: z.array(scheduleSchema), workLogs: z.array(workLogSchema), settings: settingsSchema }).superRefine((data, ctx) => {
   for (const rows of [data.categories, data.tasks, data.schedules, data.workLogs]) {
     if (new Set(rows.map(row => row.id)).size !== rows.length) ctx.addIssue({ code: 'custom', message: '存在重复 ID' })
+  }
+  if (new Set(data.todos.map(t => t.id)).size !== data.todos.length || new Set(data.weekPlans.map(w => w.weekStart)).size !== data.weekPlans.length) ctx.addIssue({ code: 'custom', message: '待办或周计划重复' })
+  for (const week of data.weekPlans) {
+    for (const entry of [...week.entries, ...(week.initialEntries ?? []), ...week.history.flatMap(h => h.entries)]) {
+      if (entry.taskId !== null && !data.tasks.some(t => t.id === entry.taskId && t.unitName === entry.unitName)) ctx.addIssue({ code: 'custom', message: '周计划任务不存在或进度单位不一致' })
+      if (entry.todoId !== null && !data.todos.some(t => t.id === entry.todoId)) ctx.addIssue({ code: 'custom', message: '周计划待办不存在' })
+    }
   }
   const taskIds = new Set(data.tasks.map(t => t.id))
   if (data.schedules.some(s => s.taskId !== null && !taskIds.has(s.taskId))) ctx.addIssue({ code: 'custom', message: '日程引用的任务不存在' })
@@ -87,7 +87,7 @@ export const datasetSchema = z.strictObject({ categories: z.array(categorySchema
   if (data.tasks.some(t => !ids.has(t.categoryId))) ctx.addIssue({ code: 'custom', message: '任务引用的分类不存在' })
 })
 export const revisionSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1)
-export const snapshotSchema = z.strictObject({ revision: revisionSchema, categories: z.array(categorySchema), tasks: z.array(taskSchema), schedules: z.array(scheduleSchema), workLogs: z.array(workLogSchema), settings: settingsSchema }).superRefine((s, ctx) => {
+export const snapshotSchema = z.strictObject({ revision: revisionSchema, ...planningFields, categories: z.array(categorySchema), tasks: z.array(taskSchema), schedules: z.array(scheduleSchema), workLogs: z.array(workLogSchema), settings: settingsSchema }).superRefine((s, ctx) => {
   const result = datasetSchema.safeParse(businessData(s))
   if (!result.success) for (const issue of result.error.issues) ctx.addIssue({ code: 'custom', message: issue.message })
 })
@@ -99,12 +99,15 @@ export type LearningTask = z.infer<typeof taskSchema>
 export type Dataset = z.infer<typeof datasetSchema>
 export type Snapshot = z.infer<typeof snapshotSchema>
 export type Receipt = z.infer<typeof receiptSchema>
-export type Command = { type: 'saveWorkLog'; value: WorkLogInput } | { type: 'removeWorkLog'; value: { id: string } } | { type: 'mergeSchedules'; value: z.infer<typeof mergeSchedulesSchema> } | { type: 'splitSchedule'; value: z.infer<typeof splitScheduleSchema> } | { type: 'saveCategory'; value: CategoryInput } | { type: 'saveTask'; value: TaskInput } | { type: 'saveSchedule'; value: ScheduleInput } | { type: 'removeSchedule'; value: { id: string } } | { type: 'restore'; value: Dataset }
+export type Command = { type: 'saveTodo'; value: TodoInput } | { type: 'saveWeekPlan'; value: WeekInput } | { type: 'saveAvailabilityTemplate'; value: { availability: Availability } } | { type: 'saveWorkLog'; value: WorkLogInput } | { type: 'removeWorkLog'; value: { id: string } } | { type: 'mergeSchedules'; value: z.infer<typeof mergeSchedulesSchema> } | { type: 'splitSchedule'; value: z.infer<typeof splitScheduleSchema> } | { type: 'saveCategory'; value: CategoryInput } | { type: 'saveTask'; value: TaskInput } | { type: 'saveSchedule'; value: ScheduleInput } | { type: 'removeSchedule'; value: { id: string } } | { type: 'restore'; value: Dataset }
 export interface Operation { requestId: string; expectedRevision: number; command: Command }
 export function businessData(snapshot: Snapshot): Dataset {
-  return { categories: snapshot.categories, tasks: snapshot.tasks, schedules: snapshot.schedules, workLogs: snapshot.workLogs, settings: snapshot.settings }
+  return { todos: snapshot.todos, weekPlans: snapshot.weekPlans, availabilityTemplate: snapshot.availabilityTemplate, categories: snapshot.categories, tasks: snapshot.tasks, schedules: snapshot.schedules, workLogs: snapshot.workLogs, settings: snapshot.settings }
 }
 export function validateCommand(command: Command): Command {
+  if (command.type === 'saveTodo') return { ...command, value: todoInputSchema.parse(command.value) }
+  if (command.type === 'saveWeekPlan') return { ...command, value: weekInputSchema.parse(command.value) }
+  if (command.type === 'saveAvailabilityTemplate') return { ...command, value: z.strictObject({ availability: availabilitySchema }).parse(command.value) }
   if (command.type === 'saveWorkLog') return { ...command, value: workLogInputSchema.parse(command.value) }
   if (command.type === 'removeWorkLog') return { ...command, value: removeScheduleSchema.parse(command.value) }
   if (command.type === 'mergeSchedules') return { ...command, value: mergeSchedulesSchema.parse(command.value) }
