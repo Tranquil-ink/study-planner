@@ -1,3 +1,4 @@
+import { checkPlanning } from './planning-browser-check.mjs'
 // Browser simulation only: synthetic Auth/HTTP + PGlite, never a cloud acceptance result.
 import { checkCalendar } from './calendar-browser-check.mjs'
 import { chromium } from 'playwright'
@@ -24,6 +25,7 @@ await db.exec(await fs.readFile('supabase/migrations/202610170001_stage1.sql','u
   await db.exec(await fs.readFile('supabase/migrations/202610190001_stage2.sql', 'utf8'))
 await db.exec(await fs.readFile('supabase/migrations/202610210001_stage3.sql', 'utf8'))
 await db.exec(await fs.readFile('supabase/migrations/202610250001_stage4.sql', 'utf8'))
+await db.exec(await fs.readFile('supabase/migrations/202611010001_stage5a.sql', 'utf8'))
 const browser = await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH,headless:true,args:['--no-sandbox']})
 const errors=[]
 const allPages=[]
@@ -140,6 +142,7 @@ try {
   phone.mode('normal')
   await p.getByRole('button',{name:'获取最新数据',exact:true}).click()
   await checkCalendar({phone,desktop,saved,db})
+  await checkPlanning({phone,desktop,saved,db})
   await p.getByRole('link',{name:'数据设置'}).click()
   const downloadPromise=p.waitForEvent('download')
   await p.getByRole('button',{name:'从云端导出完整 JSON',exact:true}).click()
@@ -147,10 +150,18 @@ try {
   await download.saveAs('work/browser-backup.json')
   const backup=JSON.parse(await fs.readFile('work/browser-backup.json','utf8'))
   assert.equal(backup.data.tasks.length,1)
+  assert.equal(backup.schemaVersion,5);assert.equal(backup.data.todos.length,1);assert.equal(backup.data.weekPlans.length,3)
+  const {todos:_todos,weekPlans:_weeks,availabilityTemplate:_template,...v4Data}=backup.data;void _todos;void _weeks;void _template
+  await fs.writeFile('work/browser-v4.json',JSON.stringify({...backup,schemaVersion:4,data:v4Data}))
+  await p.getByLabel('选择备份 / 本地数据迁移文件').setInputFiles('work/browser-v4.json')
+  await p.getByText('旧备份没有待办、周计划或可用时间模板。完整替换会清空当前这些内容及计划历史，请先备份。',{exact:true}).waitFor()
+  await p.getByRole('button',{name:'取消预览',exact:true}).click()
   await p.getByLabel('选择备份 / 本地数据迁移文件').setInputFiles('work/browser-backup.json')
-  await p.getByRole('heading',{name:'备份恢复预览（v4）',exact:true}).waitFor()
+  await p.getByRole('heading',{name:'备份恢复预览（v5）',exact:true}).waitFor()
   await p.getByLabel('我确认替换当前账号全部业务数据与设置').check()
   await p.getByRole('button',{name:'确认恢复到云端',exact:true}).click();await saved(p)
+  const restoredPlans=(await db.query('select public.planner_snapshot() value')).rows[0].value
+  assert.deepEqual(restoredPlans.weekPlans,backup.data.weekPlans);assert.deepEqual(restoredPlans.availabilityTemplate,backup.data.availabilityTemplate)
   await p.getByRole('link',{name:'任务池'}).click()
   await p.getByRole('button',{name:'编辑任务 / 归档',exact:true}).click()
   await p.getByLabel('归档任务',{exact:true}).check()

@@ -75,15 +75,15 @@ export async function checkWorkLogs({phone,desktop,saved,db,refresh}) {
     await p.getByLabel('我确认替换当前账号全部业务数据与设置').check();await p.getByRole('button',{name:'确认恢复到云端',exact:true}).click();await saved(p)
     await p.getByRole('button',{name:'取消预览',exact:true}).click()
   }
-  await restore('work/work-logs-v4.json','备份恢复预览（v4）')
+  await restore('work/work-logs-v4.json','备份恢复预览（v5）')
   assert.deepEqual((await current()).workLogs.map(l=>[l.id,l.createdOrder]),backup.data.workLogs.map(l=>[l.id,l.createdOrder]))
-  const {workLogs:_logs,...old}=backup.data;void _logs
+  const {workLogs:_logs,todos:_t,weekPlans:_w,availabilityTemplate:_a,...old}=backup.data;void _logs;void _t;void _w;void _a
   await fs.writeFile('work/work-logs-v3.json',JSON.stringify({...backup,schemaVersion:3,data:old}))
   await p.getByLabel('选择备份 / 本地数据迁移文件').setInputFiles('work/work-logs-v3.json')
   await p.getByText(/旧备份没有实际记录。完整替换将清空/).waitFor()
   await p.getByRole('button',{name:'取消预览',exact:true}).click()
-  await restore('work/work-logs-v3.json','旧格式迁移预览（v3 → v4）');assert.equal((await current()).workLogs.length,0)
-  await restore('work/work-logs-v4.json','备份恢复预览（v4）')
+  await restore('work/work-logs-v3.json','旧格式迁移预览（v3 → v5）');assert.equal((await current()).workLogs.length,0)
+  await restore('work/work-logs-v4.json','备份恢复预览（v5）')
   await p.getByRole('link',{name:'日历',exact:true}).click();await refresh(d)
   for(const width of [320,360,430,1280]) {
     await p.setViewportSize({width,height:900});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true)

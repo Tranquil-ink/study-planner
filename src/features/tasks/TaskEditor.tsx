@@ -4,6 +4,7 @@ interface Props { editor: Editor; snapshot: Snapshot; disabled: boolean; onChang
 export function TaskEditor({ editor, snapshot, disabled, onChange, onSave, onCancel, onRebase }: Props) {
   function changeCategory(patch: Partial<CategoryInput>) { if (editor.kind === 'category') onChange({ ...editor, value: { ...editor.value, ...patch } }) }
   function changeTask(patch: Partial<TaskInput>) { if (editor.kind === 'task') onChange({ ...editor, value: { ...editor.value, ...patch } }) }
+  const unitLocked = editor.kind === 'task' && (snapshot.workLogs.some(l => l.taskId === editor.value.id) || snapshot.weekPlans.some(w => w.entries.some(e => e.taskId === editor.value.id)))
   return <section className="panel" aria-label="编辑表单">
     <h2>{editor.kind === 'category' ? '分类' : '长期任务'}</h2>
     <p>输入暂存在当前页面，收到云端确认后才算保存。</p>
@@ -18,7 +19,8 @@ export function TaskEditor({ editor, snapshot, disabled, onChange, onSave, onCan
           <div><label htmlFor="task-category">分类</label><select id="task-category" value={editor.value.categoryId} required onChange={e => changeTask({ categoryId: e.target.value })}>
             <option value="">请选择分类</option>{snapshot.categories.map(c => <option value={c.id} key={c.id}>{c.name}{c.archived ? '（已归档）' : ''}</option>)}
           </select></div>
-          <label>进度单位<input value={editor.value.unitName} maxLength={20} placeholder="节、页、题或自定义" required onChange={e => changeTask({ unitName: e.target.value })} /></label>
+          <label>进度单位<input disabled={unitLocked} value={editor.value.unitName} maxLength={20} placeholder="节、页、题或自定义" required onChange={e => changeTask({ unitName: e.target.value })} /></label>
+          {unitLocked && <p className="muted">已有实际记录或周计划引用，进度单位保持不变。</p>}
           <label>总量（可留空）<input inputMode="decimal" value={editor.value.totalUnits ?? ''} onChange={e => changeTask({ totalUnits: e.target.value === '' ? null : e.target.value })} /></label>
           <label>初始已完成量<input inputMode="decimal" value={editor.value.initialCompletedUnits} required onChange={e => changeTask({ initialCompletedUnits: e.target.value })} /></label>
           <label>初始位置文字<input value={editor.value.initialProgressLabel} maxLength={200} placeholder="例如 2.1.1" onChange={e => changeTask({ initialProgressLabel: e.target.value })} /></label>

@@ -1,3 +1,4 @@
+import { withoutPlanning } from './fixtures'
 import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { datasetSchema, workLogInputSchema, type WorkLog } from '../src/domain/model'
@@ -34,9 +35,9 @@ describe('实际记录的精确进度、日期与备份', () => {
     expect(datasetSchema.safeParse(data).success).toBe(true)
     for (const workLogs of [[row({ progressDelta: '32.000001' })], [row(), row()], [row({ taskId: randomUUID() })], [row({ scheduleBlockId: randomUUID() })], [row({ scheduleBlockId: schedule.id, taskId: null, progressDelta: null })]]) expect(datasetSchema.safeParse({ ...data, workLogs }).success).toBe(false)
     const backup = createBackup({ ...data, revision: 1 })
-    expect(backup.schemaVersion).toBe(4)
+    expect(backup.schemaVersion).toBe(5)
     expect(parseBackup(JSON.stringify(backup)).backup.data).toEqual(data)
-    const { workLogs: _logs, ...oldData } = data; void _logs
+    const { workLogs: _logs, ...oldData } = withoutPlanning(data); void _logs
     const old = { ...backup, schemaVersion: 3, data: oldData }
     expect(parseBackup(JSON.stringify(old))).toMatchObject({ migrated: true, sourceVersion: 3, backup: { data: { ...oldData, workLogs: [] } } })
     expect(() => parseBackup(JSON.stringify({ ...old, data }))).toThrow()

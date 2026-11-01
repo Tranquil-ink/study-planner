@@ -14,6 +14,7 @@ export const pages = [
     pendingTitle: '任务管理尚未实现',
     pendingDescription: '分类、长期任务与进度管理将在后续阶段开放。目前不能添加或保存学习任务。',
   },
+  { id: 'todos', label: '待办', description: '选择本周重点，确认目标与可用时间。', pendingTitle: '', pendingDescription: '' },
   {
     id: 'planning',
     label: '周期计划',

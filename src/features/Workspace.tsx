@@ -10,6 +10,7 @@ import { TaskList } from './tasks/TaskList'
 import { TaskEditor, type Editor } from './tasks/TaskEditor'
 import { Calendar, type ScheduleEditor } from './calendar/Calendar'
 import type { WorkLogEditor } from './work-logs/WorkLogs'
+import { Planning, type PlanningEditor } from './planning/Planning'
 import { BackupPanel } from './settings/BackupPanel'
 export function Workspace({ repository, page, authorized, expire, logout, login, email }: {
   repository: Repository; page: Page; authorized: boolean; expire: () => void; logout: () => Promise<void>; login: ReactNode; email: string
@@ -18,6 +19,7 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
   const [editor, setEditor] = useState<Editor | null>(null)
   const [scheduleEditor, setScheduleEditor] = useState<ScheduleEditor | null>(null)
   const [workLogEditor, setWorkLogEditor] = useState<WorkLogEditor | null>(null)
+  const [planningEditor, setPlanningEditor] = useState<PlanningEditor | null>(null)
   const [pending, setPending] = useState<Operation | null>(null)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -51,11 +53,11 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
     return () => { clearTimeout(timer); activeGuard.invalidate() }
   }, [authorized, refresh])
   useEffect(() => {
-    if (!editor && !scheduleEditor && !workLogEditor && !pending) return
+    if (!editor && !scheduleEditor && !workLogEditor && !planningEditor && !pending) return
     const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [editor, scheduleEditor, workLogEditor, pending])
+  }, [editor, scheduleEditor, workLogEditor, planningEditor, pending])
   async function submit(operation: Operation, retry = false) {
     if (submitLock.current || !authorized) return
     submitLock.current = true; setBusy(true); setPending(operation); setStatus('保存中…'); setError('')
@@ -70,6 +72,7 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
       if (operation.command.type === 'saveSchedule' || operation.command.type === 'removeSchedule' || operation.command.type === 'mergeSchedules' || operation.command.type === 'splitSchedule') setScheduleEditor(null)
       else if (operation.command.type === 'saveWorkLog' || operation.command.type === 'removeWorkLog') setWorkLogEditor(null)
       else if (operation.command.type === 'saveCategory' || operation.command.type === 'saveTask') setEditor(null)
+      else if (['saveTodo', 'saveWeekPlan', 'saveAvailabilityTemplate'].includes(operation.command.type)) setPlanningEditor(null)
       setRequiredRevision(receipt.revision)
       setStatus('已保存到云端。'); await refresh()
     } catch (e) {
@@ -87,7 +90,7 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
     catch { setError('输入校验失败，请检查必填项、日期与基础时段、任务关联和进度范围。') }
   }
   async function userRefresh() {
-    if ((editor || scheduleEditor || workLogEditor) && !window.confirm('将保留当前输入，并获取最新云端数据。旧表单不会自动采用新版本；请核对后明确重新应用。继续获取？')) return null
+    if ((editor || scheduleEditor || workLogEditor || planningEditor) && !window.confirm('将保留当前输入，并获取最新云端数据。旧表单不会自动采用新版本；请核对后明确重新应用。继续获取？')) return null
     return refresh()
   }
   if (!authorized) return <>{login}<p className="notice">会话失效时已停止业务请求。当前页输入保留在内存；同账号登录后可继续核对。离开或刷新会丢失未提交输入。</p></>
@@ -97,7 +100,7 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
       <p>当前账号：{email}</p>
       <div className="actions"><button disabled={loading || busy} onClick={() => { void userRefresh() }}>{loading ? '正在获取…' : '获取最新数据'}</button>
         <button disabled={busy} onClick={() => {
-          if ((editor || scheduleEditor || workLogEditor || pending) && !window.confirm('退出将清除当前页输入和请求信息。若保存结果待确认，请先确认原请求。仍要退出？')) return
+          if ((editor || scheduleEditor || workLogEditor || planningEditor || pending) && !window.confirm('退出将清除当前页输入和请求信息。若保存结果待确认，请先确认原请求。仍要退出？')) return
           void logout().catch(handleError)
         }}>退出登录</button></div>
       <p>最近成功获取：{fetchedAt ? new Date(fetchedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未成功获取'}</p>
@@ -112,11 +115,11 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
         {editor && <TaskEditor editor={editor} snapshot={snapshot} disabled={disabled} onChange={setEditor} onSave={() => start(editor.kind === 'category' ? { type: 'saveCategory', value: editor.value } : { type: 'saveTask', value: editor.value }, editor.base)} onCancel={() => { if (window.confirm('放弃此表单的未保存输入？')) setEditor(null) }} onRebase={() => {
           if (window.confirm('已对照最新列表核对全部字段？继续后将以当前输入更新最新版本。')) setEditor({ ...editor, base: snapshot.revision })
         }} />}
-        <TaskList snapshot={snapshot} disabled={disabled || !!editor || !!scheduleEditor || !!workLogEditor} edit={setEditor} />
+        <TaskList snapshot={snapshot} disabled={disabled || !!editor || !!scheduleEditor || !!workLogEditor || !!planningEditor} edit={setEditor} />
       </div>
-      <div hidden={page.id !== 'settings'}><BackupPanel repository={repository} snapshot={snapshot} disabled={disabled || !!editor || !!scheduleEditor || !!workLogEditor} refresh={refresh} restore={(backup: Backup, base) => start({ type: 'restore', value: backup.data }, base)} onError={handleError} /></div>
-      <div hidden={page.id !== 'calendar'}><Calendar snapshot={snapshot} editor={scheduleEditor} disabled={disabled || !!editor || !!workLogEditor} workLogs={{
-        editor: workLogEditor, disabled: disabled || !!editor || !!scheduleEditor, edit: setWorkLogEditor,
+      <div hidden={page.id !== 'settings'}><BackupPanel repository={repository} snapshot={snapshot} disabled={disabled || !!editor || !!scheduleEditor || !!workLogEditor || !!planningEditor} refresh={refresh} restore={(backup: Backup, base) => start({ type: 'restore', value: backup.data }, base)} onError={handleError} /></div>
+      <div hidden={page.id !== 'calendar'}><Calendar snapshot={snapshot} editor={scheduleEditor} disabled={disabled || !!editor || !!workLogEditor || !!planningEditor} workLogs={{
+        editor: workLogEditor, disabled: disabled || !!editor || !!scheduleEditor || !!planningEditor, edit: setWorkLogEditor,
         save: () => { if (workLogEditor) start({ type: 'saveWorkLog', value: workLogEditor.value }, workLogEditor.base) },
         remove: () => { if (workLogEditor && window.confirm('删除这条实际记录？实际分钟数和新增进度会重新汇总，计划保持不变。')) start({ type: 'removeWorkLog', value: { id: workLogEditor.value.id } }, workLogEditor.base) },
         cancel: () => { if (window.confirm('放弃实际记录表单的未保存输入？')) setWorkLogEditor(null) },
@@ -129,9 +132,15 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
       }} remove={() => {
         if (scheduleEditor && window.confirm('确认移除此日程？实际记录会保留并解除日程关联，长期任务不受影响。')) start({ type: 'removeSchedule', value: { id: scheduleEditor.value.id } }, scheduleEditor.base)
       }} cancel={() => { if (window.confirm('放弃日程表单的未保存输入？')) setScheduleEditor(null) }} /></div>
+      <div hidden={page.id !== 'todos'}><Planning snapshot={snapshot} editor={planningEditor} edit={setPlanningEditor} disabled={disabled || !!editor || !!scheduleEditor || !!workLogEditor} cancel={() => { if (window.confirm('放弃当前计划表单的未保存输入？')) setPlanningEditor(null) }} save={() => {
+        if (!planningEditor) return
+        const command: Command = planningEditor.kind === 'todo' ? { type: 'saveTodo', value: planningEditor.value } : planningEditor.kind === 'week' ? { type: 'saveWeekPlan', value: planningEditor.value } : { type: 'saveAvailabilityTemplate', value: planningEditor.value }
+        start(command, planningEditor.base)
+      }} /></div>
+      {planningEditor && page.id !== 'todos' && <p className="notice">待办中有未保存计划，切回待办可继续编辑。</p>}
       {workLogEditor && page.id !== 'calendar' && <p className="notice">日历中有未保存的实际记录，切回日历可继续编辑。</p>}
       {scheduleEditor && page.id !== 'calendar' && <p className="notice">日历中有未保存表单，切回日历可继续编辑。</p>}
-      {page.id !== 'calendar' && page.id !== 'tasks' && page.id !== 'settings' && <FeaturePlaceholder page={page} />}
+      {page.id !== 'calendar' && page.id !== 'tasks' && page.id !== 'settings' && page.id !== 'todos' && <FeaturePlaceholder page={page} />}
       {editor && page.id !== 'tasks' && <p className="notice">任务池中有未保存表单，切回任务池可继续编辑。</p>}
     </>}
   </>
