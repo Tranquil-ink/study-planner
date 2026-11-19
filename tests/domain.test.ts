@@ -14,7 +14,7 @@ describe('精确进度与备份边界', () => {
   it('完整往返包含归档与设置，不携带身份或内部状态', () => {
     const data = fixtureData(); data.tasks[0].archived = true
     const backup = createBackup({ ...data, revision: 9 })
-    expect(parseBackup(JSON.stringify(backup)).backup.data).toEqual(data)
+    expect(parseBackup(JSON.stringify(backup)).data).toEqual(data)
     expect(backup).not.toHaveProperty('owner_id')
     expect(backup.data).not.toHaveProperty('receipts')
   })
@@ -27,17 +27,13 @@ describe('精确进度与备份边界', () => {
   })
   it('拒绝无效 JSON、未来版本与无效时间', () => {
     expect(() => parseBackup('{')).toThrow('有效 JSON')
-    expect(() => parseBackup('{"schemaVersion":999}')).toThrow('不支持')
+    expect(() => parseBackup('{"schemaVersion":999}')).toThrow('仅恢复 v5')
     const backup = createBackup({ ...fixtureData(), revision: 0 })
     backup.exportedAt = '2026-02-30T00:00:00Z'
     expect(() => parseBackup(JSON.stringify(backup))).toThrow()
   })
-  it('约定旧格式映射保留 ID、分类、位置和数值；未知格式拒绝', () => {
-    const data = { categories: fixtureData().categories, tasks: fixtureData().tasks, settings: fixtureData().settings }
-    const old = { format: 'study-planner-local', schemaVersion: 0, appVersion: '0.0.0', exportedAt: '2026-10-17T00:00:00Z', data: { ...data, tasks: [{ ...data.tasks[0], totalUnits: 40, initialCompletedUnits: 8.5 }] } }
-    const result = parseBackup(JSON.stringify(old))
-    expect(result.migrated).toBe(true)
-    expect(result.backup.data.tasks[0]).toEqual({ ...data.tasks[0], initialCompletedUnits: '8.5' })
-    expect(() => parseBackup(JSON.stringify({ ...old, format: 'unknown' }))).toThrow()
+  it('旧备份不进入恢复事务', () => {
+    const backup = createBackup({ ...fixtureData(), revision: 0 })
+    expect(() => parseBackup(JSON.stringify({ ...backup, schemaVersion: 4 }))).toThrow('仅恢复 v5')
   })
 })

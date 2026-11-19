@@ -1,23 +1,38 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { FeaturePlaceholder } from '../components/FeaturePlaceholder'
 import { dataError, DataError, messageOf } from '../data/errors'
 import type { Repository } from '../data/repository'
-import type { Backup } from '../data/backup'
 import { SnapshotGuard } from '../data/session-store'
-import { validateCommand, type Command, type Operation, type Snapshot } from '../domain/model'
+import { today, weekStart } from '../domain/calendar'
+import { subjectKey, validateCommand, type Command, type Operation, type Snapshot } from '../domain/model'
+import { entrySubject, selectedEntry } from '../domain/planning'
 import type { Page } from '../navigation'
-import { TaskList } from './tasks/TaskList'
-import { TaskEditor, type Editor } from './tasks/TaskEditor'
-import { Calendar, type ScheduleEditor } from './calendar/Calendar'
-import type { WorkLogEditor } from './work-logs/WorkLogs'
+import type { PlannerActions } from './planner/actions'
+import { CalendarPage, DayPage } from './planner/DaysPage'
+import { PlannerEditor, type Editor } from './planner/PlannerEditor'
+import { PoolPage } from './planner/PoolPage'
+import { ReviewPage } from './planner/ReviewPage'
+import { WeekPage } from './planner/WeekPage'
 import { BackupPanel } from './settings/BackupPanel'
+
+function useBusinessToday() {
+  const [now, setNow] = useState(today)
+  useEffect(() => {
+    const update = () => setNow(today())
+    const timer = setInterval(update, 60000)
+    window.addEventListener('focus', update)
+    return () => { clearInterval(timer); window.removeEventListener('focus', update) }
+  }, [])
+  return now
+}
+
 export function Workspace({ repository, page, authorized, expire, logout, login, email }: {
   repository: Repository; page: Page; authorized: boolean; expire: () => void; logout: () => Promise<void>; login: ReactNode; email: string
 }) {
+  const now = useBusinessToday()
+  const [date, setDate] = useState(now)
+  const [calendarStart] = useState<'week' | 'day'>(() => window.matchMedia('(max-width: 760px)').matches ? 'day' : 'week')
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [editor, setEditor] = useState<Editor | null>(null)
-  const [scheduleEditor, setScheduleEditor] = useState<ScheduleEditor | null>(null)
-  const [workLogEditor, setWorkLogEditor] = useState<WorkLogEditor | null>(null)
   const [pending, setPending] = useState<Operation | null>(null)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -29,6 +44,7 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
   const submitLock = useRef(false)
   const authorizedRef = useRef(authorized)
   useEffect(() => { authorizedRef.current = authorized }, [authorized])
+
   const handleError = useCallback((e: unknown) => {
     setError(messageOf(e))
     if (e instanceof DataError && e.kind === 'auth') expire()
@@ -40,10 +56,16 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
     try {
       const next = await repository.snapshot()
       if (!authorizedRef.current || !guard.current.accept(ticket, next)) return null
-      setSnapshot(next); setFetchedAt(new Date().toISOString()); setError('')
+      setSnapshot(next)
+      setFetchedAt(new Date().toISOString())
+      setError('')
       return next
-    } catch (e) { if (ticket === guard.current.ticket()) handleError(e); return null }
-    finally { if (ticket === guard.current.ticket()) setLoading(false) }
+    } catch (e) {
+      if (ticket === guard.current.ticket()) handleError(e)
+      return null
+    } finally {
+      if (ticket === guard.current.ticket()) setLoading(false)
+    }
   }, [repository, handleError])
   useEffect(() => {
     const activeGuard = guard.current
@@ -51,88 +73,140 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
     return () => { clearTimeout(timer); activeGuard.invalidate() }
   }, [authorized, refresh])
   useEffect(() => {
-    if (!editor && !scheduleEditor && !workLogEditor && !pending) return
+    if (!editor && !pending) return
     const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [editor, scheduleEditor, workLogEditor, pending])
+  }, [editor, pending])
+
   async function submit(operation: Operation, retry = false) {
     if (submitLock.current || !authorized) return
-    submitLock.current = true; setBusy(true); setPending(operation); setStatus('保存中…'); setError('')
+    submitLock.current = true
+    setBusy(true); setPending(operation); setStatus('保存中…'); setError('')
     const ticket = guard.current.ticket()
     try {
       const confirmed = retry ? await repository.confirm(operation.requestId) : null
       const receipt = confirmed ?? await repository.submit(operation)
       if (ticket !== guard.current.ticket() || !authorizedRef.current) {
-        setStatus('保存结果待确认，请重新登录后确认原请求。'); return
+        setStatus('保存结果待确认。重新登录后可以确认原请求。')
+        return
       }
-      setPending(null);
-      if (operation.command.type === 'saveSchedule' || operation.command.type === 'removeSchedule' || operation.command.type === 'mergeSchedules' || operation.command.type === 'splitSchedule') setScheduleEditor(null)
-      else if (operation.command.type === 'saveWorkLog' || operation.command.type === 'removeWorkLog') setWorkLogEditor(null)
-      else if (operation.command.type === 'saveCategory' || operation.command.type === 'saveTask') setEditor(null)
-      setRequiredRevision(receipt.revision)
-      setStatus('已保存到云端。'); await refresh()
+      setPending(null); setEditor(null); setRequiredRevision(receipt.revision)
+      setStatus('已保存到云端。')
+      await refresh()
     } catch (e) {
       const failure = dataError(e, !retry)
-      // Confirmation read failures also retain the exact original operation.
       const unresolved = failure.kind === 'unknown' || failure.kind === 'auth' || (retry && failure.kind !== 'validation' && failure.kind !== 'conflict')
       if (!unresolved) setPending(null)
-      setStatus(unresolved ? '保存结果待确认；原请求与输入仍保留。' : '保存失败，尚未提交此修改。')
+      setStatus(unresolved ? '保存结果待确认。原请求与输入仍保留。' : '保存失败。')
       handleError(failure)
-    } finally { submitLock.current = false; setBusy(false) }
+      if (failure.kind === 'conflict') {
+        await refresh()
+        handleError(failure)
+      }
+    } finally {
+      submitLock.current = false
+      setBusy(false)
+    }
   }
-  function start(command: Command, base: number) {
-    if (pending || busy) return
-    try { const value = validateCommand(command); void submit({ requestId: crypto.randomUUID(), expectedRevision: base, command: value }) }
-    catch { setError('输入校验失败，请检查必填项、日期与基础时段、任务关联和进度范围。') }
-  }
-  async function userRefresh() {
-    if ((editor || scheduleEditor || workLogEditor) && !window.confirm('将保留当前输入，并获取最新云端数据。旧表单不会自动采用新版本；请核对后明确重新应用。继续获取？')) return null
-    return refresh()
-  }
-  if (!authorized) return <>{login}<p className="notice">会话失效时已停止业务请求。当前页输入保留在内存；同账号登录后可继续核对。离开或刷新会丢失未提交输入。</p></>
+
   const disabled = busy || !!pending || loading || !snapshot || snapshot.revision < requiredRevision
+  function start(command: Command, base: number) {
+    if (disabled) return
+    try {
+      const value = validateCommand(command)
+      void submit({ requestId: crypto.randomUUID(), expectedRevision: base, command: value })
+    } catch (error) {
+      const issue = (error as { issues?: { message: string }[] }).issues?.[0]
+      setError(issue ? `请检查输入。 ${issue.message}` : '输入未通过校验。')
+    }
+  }
+
+  if (!authorized) return <>{login}<p className="notice">登录失效。用同一账号重新登录后可以核对未保存的输入。</p></>
+  const edit: PlannerActions['edit'] = (command, options) => {
+    if (disabled || !snapshot || editor) return
+    setStatus(''); setError('')
+    setEditor({ ...options, base: snapshot.revision, command })
+  }
+  const actions: PlannerActions = {
+    disabled: disabled || !!editor,
+    edit,
+    run(command, confirmation) {
+      if (snapshot && !disabled && !editor && (!confirmation || window.confirm(confirmation))) start(command, snapshot.revision)
+    },
+    plan(entry) {
+      if (!snapshot || disabled || editor) return
+      const week = weekStart(page.id === 'planning' ? date : now)
+      const subject = entry ? entrySubject(entry) : { taskId: null, todoId: null }
+      const existing = entry && snapshot.weekItems.find(i => i.weekStart === week && subjectKey(i) === subjectKey(subject))
+      if (existing) {
+        setDate(week)
+        window.location.hash = 'planning'
+        setStatus('此任务已有本周目标。')
+        return
+      }
+      edit({ type: 'saveWeekItem', value: { id: crypto.randomUUID(), weekStart: week, ...subject,
+        minutes: entry?.kind === 'todo' ? entry.estimatedMinutes ?? 0 : 0, targetUnits: null } },
+      { title: '加入本周', lockedSubject: !!entry })
+    },
+    schedule(date, subject = { taskId: null, todoId: null }, minutes = 0, units = null) {
+      if (!snapshot) return
+      const entry = selectedEntry(snapshot, subject)
+      const plannedDate = page.id === 'planning' && weekStart(now) === date && date < now ? now : date
+      edit({ type: 'saveSchedule', value: { id: crypto.randomUUID(), date: plannedDate, taskId: subject.taskId, todoId: subject.todoId,
+        title: entry?.title ?? '', plannedMinutes: minutes, plannedUnits: units, plannedRangeText: '', note: '', resolved: false } },
+      { title: '安排到一天', lockedSubject: !!entry })
+    },
+    record(date, schedule, subject = schedule ?? { taskId: null, todoId: null }) {
+      if (!snapshot) return
+      const entry = selectedEntry(snapshot, subject)
+      edit({ type: 'saveWorkLog', value: { id: crypto.randomUUID(), date, taskId: subject.taskId, todoId: subject.todoId,
+        scheduleBlockId: schedule?.id ?? null, titleSnapshot: entry?.title ?? schedule?.title ?? '', actualMinutes: 0,
+        progressDelta: subject.taskId ? '0' : null, progressLabel: '', note: '' } }, { title: schedule ? '记实际' : '补记实际' })
+    },
+  }
+  const retry = pending && !busy && <button type="button" onClick={() => { void submit(pending, true) }}>确认并重试原请求</button>
+  const cancelEditor = () => { if (!busy && !pending && window.confirm('放弃这个表单的输入？')) { setEditor(null); setError(''); setStatus('') } }
+  const removeEditor = editor?.existing && (editor.command.type === 'saveSchedule' || editor.command.type === 'saveWorkLog')
+    ? () => {
+      const schedule = editor.command.type === 'saveSchedule'
+      if ((editor.command.type === 'saveSchedule' || editor.command.type === 'saveWorkLog')
+        && window.confirm(schedule ? '删除这个安排？关联的实际记录会保留。' : '删除这条实际记录？投入和进度会重新汇总。')) {
+        start({ type: schedule ? 'removeSchedule' : 'removeWorkLog', value: { id: editor.command.value.id } }, editor.base)
+      }
+    } : undefined
   return <>
-    <section className="cloud-bar" aria-label="云端状态">
-      <p>当前账号：{email}</p>
-      <div className="actions"><button disabled={loading || busy} onClick={() => { void userRefresh() }}>{loading ? '正在获取…' : '获取最新数据'}</button>
-        <button disabled={busy} onClick={() => {
-          if ((editor || scheduleEditor || workLogEditor || pending) && !window.confirm('退出将清除当前页输入和请求信息。若保存结果待确认，请先确认原请求。仍要退出？')) return
-          void logout().catch(handleError)
-        }}>退出登录</button></div>
-      <p>最近成功获取：{fetchedAt ? new Date(fetchedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未成功获取'}</p>
-      <p role="status">{status}{loading && ' 正在读取云端…'}</p>
-      {error && <p role="alert">{error}{snapshot && ' 当前列表可能过期。'}</p>}
-      {pending && !busy && <div className="notice"><p>请求编号：{pending.requestId}。确认前输入已锁定。</p><button onClick={() => { void submit(pending, true) }}>确认并重试原请求</button></div>}
-      {snapshot && snapshot.revision < requiredRevision && <p role="alert">保存已确认，但尚未取得保存后的完整数据，请获取最新数据。</p>}
-    </section>
-    <header className="page-header"><p className="eyebrow">我的学习空间</p><h1>{page.label}</h1><p>{page.description}</p></header>
-    {!snapshot ? <p>尚未获得云端数据；请获取最新数据。读取失败不代表没有任务。</p> : <>
-      <div hidden={page.id !== 'tasks'}>
-        {editor && <TaskEditor editor={editor} snapshot={snapshot} disabled={disabled} onChange={setEditor} onSave={() => start(editor.kind === 'category' ? { type: 'saveCategory', value: editor.value } : { type: 'saveTask', value: editor.value }, editor.base)} onCancel={() => { if (window.confirm('放弃此表单的未保存输入？')) setEditor(null) }} onRebase={() => {
-          if (window.confirm('已对照最新列表核对全部字段？继续后将以当前输入更新最新版本。')) setEditor({ ...editor, base: snapshot.revision })
-        }} />}
-        <TaskList snapshot={snapshot} disabled={disabled || !!editor || !!scheduleEditor || !!workLogEditor} edit={setEditor} />
-      </div>
-      <div hidden={page.id !== 'settings'}><BackupPanel repository={repository} snapshot={snapshot} disabled={disabled || !!editor || !!scheduleEditor || !!workLogEditor} refresh={refresh} restore={(backup: Backup, base) => start({ type: 'restore', value: backup.data }, base)} onError={handleError} /></div>
-      <div hidden={page.id !== 'calendar'}><Calendar snapshot={snapshot} editor={scheduleEditor} disabled={disabled || !!editor || !!workLogEditor} workLogs={{
-        editor: workLogEditor, disabled: disabled || !!editor || !!scheduleEditor, edit: setWorkLogEditor,
-        save: () => { if (workLogEditor) start({ type: 'saveWorkLog', value: workLogEditor.value }, workLogEditor.base) },
-        remove: () => { if (workLogEditor && window.confirm('删除这条实际记录？实际分钟数和新增进度会重新汇总，计划保持不变。')) start({ type: 'removeWorkLog', value: { id: workLogEditor.value.id } }, workLogEditor.base) },
-        cancel: () => { if (window.confirm('放弃实际记录表单的未保存输入？')) setWorkLogEditor(null) },
-      }} record={block => {
-        setScheduleEditor(null)
-        setWorkLogEditor({ base: snapshot.revision, existing: false, value: { id: crypto.randomUUID(), date: block.date, taskId: block.taskId, scheduleBlockId: block.id, titleSnapshot: snapshot.tasks.find(t => t.id === block.taskId)?.title ?? block.title, actualMinutes: 0, progressDelta: block.taskId ? '0' : null, progressLabel: '', note: '' } })
-      }} edit={setScheduleEditor} split={copyPlanText => { if (scheduleEditor) start({ type: 'splitSchedule', value: { id: scheduleEditor.value.id, copyPlanText } }, scheduleEditor.base) }} save={() => {
-        if (scheduleEditor?.mergeIds && !scheduleEditor.contentConfirmed) return
-        if (scheduleEditor) start(scheduleEditor.mergeIds ? { type: 'mergeSchedules', value: { ids: scheduleEditor.mergeIds, result: scheduleEditor.value, contentConfirmed: true } } : { type: 'saveSchedule', value: scheduleEditor.value }, scheduleEditor.base)
-      }} remove={() => {
-        if (scheduleEditor && window.confirm('确认移除此日程？实际记录会保留并解除日程关联，长期任务不受影响。')) start({ type: 'removeSchedule', value: { id: scheduleEditor.value.id } }, scheduleEditor.base)
-      }} cancel={() => { if (window.confirm('放弃日程表单的未保存输入？')) setScheduleEditor(null) }} /></div>
-      {workLogEditor && page.id !== 'calendar' && <p className="notice">日历中有未保存的实际记录，切回日历可继续编辑。</p>}
-      {scheduleEditor && page.id !== 'calendar' && <p className="notice">日历中有未保存表单，切回日历可继续编辑。</p>}
-      {page.id !== 'calendar' && page.id !== 'tasks' && page.id !== 'settings' && <FeaturePlaceholder page={page} />}
-      {editor && page.id !== 'tasks' && <p className="notice">任务池中有未保存表单，切回任务池可继续编辑。</p>}
-    </>}
+    <header className="page-header">
+      <div><h1>{page.label}</h1><p>{page.description}</p></div>
+      <details className="account-menu">
+        <summary>账号</summary>
+        <div className="account-panel"><strong>{email}</strong>
+          <p className="muted">最近获取 {fetchedAt ? new Date(fetchedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未成功'}</p>
+          <button disabled={busy || loading} onClick={() => { void refresh() }}>获取最新数据</button>
+          <button disabled={busy} className="button-text" onClick={() => {
+            if (pending && !window.confirm('退出会清除当前请求信息。仍要退出？')) return
+            void logout().catch(handleError)
+          }}>退出登录</button>
+        </div>
+      </details>
+    </header>
+    <div className="workspace-status" aria-label="云端状态">
+      <span role="status">{loading ? '正在读取云端…' : status}</span>
+      {!editor && error && <p className="notice notice-warning" role="alert">{error}</p>}
+      {snapshot && snapshot.revision < requiredRevision && <p className="notice" role="alert">保存已确认，请获取最新数据后继续。</p>}
+      {!editor && retry}
+    </div>
+    {snapshot ? <>
+      {page.id === 'today' && <DayPage data={snapshot} date={now} now={now} actions={actions} />}
+      {page.id === 'tasks' && <PoolPage data={snapshot} now={now} actions={actions} />}
+      {page.id === 'planning' && <WeekPage data={snapshot} date={date} now={now} setDate={setDate} actions={actions} />}
+      {page.id === 'calendar' && <CalendarPage data={snapshot} date={date} now={now} setDate={setDate} actions={actions} initialMode={calendarStart} />}
+      {page.id === 'review' && <ReviewPage data={snapshot} date={date} now={now} setDate={setDate} />}
+      {page.id === 'settings' && <BackupPanel repository={repository} snapshot={snapshot} disabled={actions.disabled} refresh={refresh}
+        restore={(backup, base) => start({ type: 'restore', value: backup.data }, base)} onError={handleError} />}
+      {editor && <PlannerEditor editor={editor} data={snapshot} now={now} disabled={disabled} error={error} status={status} retry={retry}
+        onChange={setEditor} onSubmit={() => start(editor.command, editor.base)} onCancel={cancelEditor}
+        onRebase={() => { setEditor({ ...editor, base: snapshot.revision }); setError(''); setStatus('') }} onRemove={removeEditor} />}
+    </> : !loading && <section className="panel stack"><p>尚未获取云端数据。</p><button onClick={() => { void refresh() }}>重新获取</button></section>}
   </>
 }
