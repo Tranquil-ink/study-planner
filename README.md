@@ -25,7 +25,7 @@ npm run dev
 
 在 `.env.local` 填写 Supabase 项目 URL 与公开 publishable key 或旧 anon key。安装数据库及登录步骤见 [Supabase 配置](docs/SUPABASE.md)。
 
-**已完成阶段 4 的隔离测试项目可直接复用。** 先应用新增的 `202611190001_week_planner.sql`，然后部署 v0.5.0 前端。迁移只执行一次。旧测试安排的计划分钟数取原时段长度，旧钟点不再使用。旧版 JSON 只在对应版本使用。
+**已完成阶段 4 或阶段 5A 的隔离测试项目可直接复用。** 应用最新版 `202611190001_week_planner.sql` 后部署 v0.5.0 前端。旧安排保留日期与时长。5A 的测试待办、周计划和容量模板在新版从空白开始。升级和迁移历史登记步骤见 [Supabase 配置](docs/SUPABASE.md)。
 
 旧版代码保存在阶段 4 合并提交 `94a970a`。如需单独查看旧版，可以用 `git worktree add --detach work/stage-4 94a970a`。运行旧版时需连接阶段 4 结构的数据库。切换 Git 版本不会改变 Supabase 数据库结构。
 

@@ -43,7 +43,9 @@ beforeAll(async () => {
     grant usage on schema auth to anon,authenticated; grant execute on function auth.uid() to anon,authenticated;
     insert into auth.users values('${ownerA}'),('${ownerB}');`)
   const migrations = (await readdir('supabase/migrations')).filter(f => f.endsWith('.sql')).sort()
-  for (const file of migrations.slice(0, -1)) await db.exec(await readFile(`supabase/migrations/${file}`, 'utf8'))
+  for (const file of migrations.filter(f => f < '202611010001_stage5a.sql')) {
+    await db.exec(await readFile(`supabase/migrations/${file}`, 'utf8'))
+  }
   await actor()
   await rawSnapshot()
   await write('saveCategory', category, 0)

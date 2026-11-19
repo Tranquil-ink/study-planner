@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto'
 import { PGlite } from '@electric-sql/pglite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { snapshotSchema } from '../src/domain/model'
-import { category, task, ownerA, ownerB, fixtureData } from './fixtures'
+import { category, task, legacyTask, todo, ownerA, ownerB, fixtureData } from './fixtures'
 let db: PGlite
+const owner5a = '10000000-0000-4000-8000-000000000003'
+const weekPlannerMigration = '202611190001_week_planner.sql'
 async function actor(id: string, role = 'authenticated') {
   await db.exec('reset role')
   await db.query("select set_config('request.jwt.claim.sub',$1,false)", [id])
@@ -22,13 +24,35 @@ beforeAll(async () => {
     create table auth.users(id uuid primary key);
     create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
     grant usage on schema auth to anon,authenticated; grant execute on function auth.uid() to anon,authenticated;
-    insert into auth.users values('${ownerA}'),('${ownerB}');`)
-  for (const file of (await readdir('supabase/migrations')).filter(f => f.endsWith('.sql')).sort()) {
+    insert into auth.users values('${ownerA}'),('${ownerB}'),('${owner5a}');`)
+  const migrations = (await readdir('supabase/migrations')).filter(f => f.endsWith('.sql')).sort()
+  for (const file of migrations.filter(f => f < weekPlannerMigration)) {
+    await db.exec(await readFile(`supabase/migrations/${file}`, 'utf8'))
+  }
+  await actor(owner5a)
+  await snapshot()
+  const availability = [{ day: 0, startMinute: 540, endMinute: 600 }]
+  await mutate({ type: 'saveCategory', value: category }, 0)
+  await mutate({ type: 'saveTask', value: legacyTask }, 1)
+  await mutate({ type: 'saveTodo', value: { id: todo.id, title: todo.title, estimatedMinutes: 60, note: '', archived: false } }, 2)
+  await mutate({ type: 'saveAvailabilityTemplate', value: { availability } }, 3)
+  await mutate({ type: 'saveWeekPlan', value: { weekStart: '2026-10-19', availability, entries: [], confirm: true } }, 4)
+  await db.exec('reset role')
+  for (const file of migrations.filter(f => f >= weekPlannerMigration)) {
     await db.exec(await readFile(`supabase/migrations/${file}`, 'utf8'))
   }
 }, 30000)
 afterAll(async () => { await db?.close() })
 describe('迁移在本地 PostgreSQL 引擎上的权限与事务检查', () => {
+  it('已有 5A 的库可直接升级，5A 测试计划从空白开始且账号与原任务保留', async () => {
+    await actor(owner5a)
+    const state = snapshotSchema.parse(await snapshot())
+    expect(state).toMatchObject({ revision: 6, todos: [], weeks: [], weekItems: [], settings: { capacityTemplate: null } })
+    expect(state.categories.map(c => c.id)).toEqual([category.id])
+    expect(state.tasks.map(t => t.id)).toEqual([legacyTask.id])
+    await mutate({ type: 'saveTodo', value: todo }, state.revision)
+    expect(snapshotSchema.parse(await snapshot()).todos[0]).toMatchObject(todo)
+  })
   it('匿名不能读任何表或调用任何公开 RPC', async () => {
     await actor('', 'anon')
     for (const table of ['categories','projects','tasks','todos','weeks','week_items','schedules','work_logs','settings','dataset_state','operation_receipts']) await expect(db.query(`select * from public.planner_${table}`)).rejects.toThrow(/permission denied/)

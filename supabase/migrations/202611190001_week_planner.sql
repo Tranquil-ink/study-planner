@@ -1,5 +1,18 @@
--- Phase 5: day-based schedules and weekly planning. Apply after stage 4.
+-- Phase 5: day-based schedules and weekly planning. Apply after stage 4 or 5A.
 begin;
+
+-- The 5A snapshot wrapper identifies databases that ran 202611010001.
+-- Replace only its experimental planning data and helpers in this transaction.
+do $$
+begin
+  if to_regprocedure('planner_private.snapshot_v4()') is not null then
+    drop table public.planner_todos, public.planner_week_plans, public.planner_availability_templates;
+    drop function planner_private.snapshot_v4(), planner_private.put_todo(uuid,jsonb),
+      planner_private.put_week(uuid,jsonb), planner_private.validate_week(uuid,jsonb),
+      planner_private.validate_entries(uuid,jsonb), planner_private.validate_entry_continuity(jsonb,jsonb),
+      planner_private.validate_availability(jsonb), planner_private.valid_id(jsonb), planner_private.valid_date(jsonb);
+  end if;
+end $$;
 
 create table public.planner_projects (
   owner_id uuid not null references auth.users(id) on delete cascade,
