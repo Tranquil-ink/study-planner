@@ -6,5 +6,4 @@ export interface Repository {
   confirm(requestId: string): Promise<Receipt | null>
   exportBackup(): Promise<Backup>
   restore(backup: Backup, expectedRevision: number, requestId: string): Promise<Receipt>
-  migrate(contents: string, expectedRevision: number, requestId: string): Promise<Receipt>
 }

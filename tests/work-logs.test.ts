@@ -4,7 +4,7 @@ import { datasetSchema, workLogInputSchema, type WorkLog } from '../src/domain/m
 import { taskProgress } from '../src/domain/work-logs'
 import { createBackup, parseBackup } from '../src/data/backup'
 import { audit, fixtureData, schedule, task } from './fixtures'
-const row = (patch: Partial<WorkLog> = {}): WorkLog => ({ id: randomUUID(), date: '2026-10-25', taskId: task.id, scheduleBlockId: null, titleSnapshot: task.title, actualMinutes: 80, progressDelta: '1.5', progressLabel: '2.2', note: '', createdOrder: 1, ...audit, ...patch })
+const row = (patch: Partial<WorkLog> = {}): WorkLog => ({ id: randomUUID(), date: '2026-10-25', taskId: task.id, todoId: null, scheduleBlockId: null, titleSnapshot: task.title, actualMinutes: 80, progressDelta: '1.5', progressLabel: '2.2', note: '', createdOrder: 1, ...audit, ...patch })
 describe('实际记录的精确进度、日期与备份', () => {
   it('8 → 9.5 → 9 → 8；编辑替换原记录，零进度仍计投入', () => {
     const t = fixtureData().tasks[0]
@@ -34,12 +34,9 @@ describe('实际记录的精确进度、日期与备份', () => {
     expect(datasetSchema.safeParse(data).success).toBe(true)
     for (const workLogs of [[row({ progressDelta: '32.000001' })], [row(), row()], [row({ taskId: randomUUID() })], [row({ scheduleBlockId: randomUUID() })], [row({ scheduleBlockId: schedule.id, taskId: null, progressDelta: null })]]) expect(datasetSchema.safeParse({ ...data, workLogs }).success).toBe(false)
     const backup = createBackup({ ...data, revision: 1 })
-    expect(backup.schemaVersion).toBe(4)
-    expect(parseBackup(JSON.stringify(backup)).backup.data).toEqual(data)
-    const { workLogs: _logs, ...oldData } = data; void _logs
-    const old = { ...backup, schemaVersion: 3, data: oldData }
-    expect(parseBackup(JSON.stringify(old))).toMatchObject({ migrated: true, sourceVersion: 3, backup: { data: { ...oldData, workLogs: [] } } })
-    expect(() => parseBackup(JSON.stringify({ ...old, data }))).toThrow()
-    expect(() => parseBackup(JSON.stringify({ ...backup, data: oldData }))).toThrow()
+    expect(backup.schemaVersion).toBe(5)
+    expect(parseBackup(JSON.stringify(backup)).data).toEqual(data)
+    const withoutLogs = { ...data, workLogs: undefined }
+    expect(() => parseBackup(JSON.stringify({ ...backup, data: withoutLogs }))).toThrow()
   })
 })

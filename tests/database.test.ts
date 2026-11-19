@@ -1,10 +1,8 @@
-// Historical schema suite: adapt empty workLogs at the test boundary only.
-// The production snapshot parser requires v4; stage-4 migration tests use it directly.
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { PGlite } from '@electric-sql/pglite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { snapshotSchema, type Command } from '../src/domain/model'
+import { snapshotSchema } from '../src/domain/model'
 import { category, task, ownerA, ownerB, fixtureData } from './fixtures'
 let db: PGlite
 async function actor(id: string, role = 'authenticated') {
@@ -12,9 +10,9 @@ async function actor(id: string, role = 'authenticated') {
   await db.query("select set_config('request.jwt.claim.sub',$1,false)", [id])
   await db.exec(`set role ${role}`)
 }
-async function snapshot() { return { ...(await db.query<{ value: Record<string, unknown> }>('select public.planner_snapshot() as value')).rows[0].value, workLogs: [] } }
-async function mutate(command: Command | unknown, rev: number, id = randomUUID()) {
-  return (await db.query<{ value: { revision: number; requestId: string } }>('select public.planner_mutate($1,$2,$3::jsonb) as value', [id, rev, JSON.stringify(command, (key, value: unknown) => key === 'workLogs' ? undefined : value)])).rows[0].value
+async function snapshot() { return (await db.query<{ value: unknown }>('select public.planner_snapshot() as value')).rows[0].value }
+async function mutate(command: unknown, rev: number, id = randomUUID()) {
+  return (await db.query<{ value: { revision: number; requestId: string } }>('select public.planner_mutate($1,$2,$3::jsonb) as value', [id, rev, JSON.stringify(command)])).rows[0].value
 }
 beforeAll(async () => {
   db = new PGlite()
@@ -25,14 +23,15 @@ beforeAll(async () => {
     create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
     grant usage on schema auth to anon,authenticated; grant execute on function auth.uid() to anon,authenticated;
     insert into auth.users values('${ownerA}'),('${ownerB}');`)
-  await db.exec(await readFile('supabase/migrations/202610170001_stage1.sql', 'utf8'))
-  await db.exec(await readFile('supabase/migrations/202610190001_stage2.sql', 'utf8'))
+  for (const file of (await readdir('supabase/migrations')).filter(f => f.endsWith('.sql')).sort()) {
+    await db.exec(await readFile(`supabase/migrations/${file}`, 'utf8'))
+  }
 }, 30000)
 afterAll(async () => { await db?.close() })
 describe('迁移在本地 PostgreSQL 引擎上的权限与事务检查', () => {
   it('匿名不能读任何表或调用任何公开 RPC', async () => {
     await actor('', 'anon')
-    for (const table of ['categories','tasks','schedules','settings','dataset_state','operation_receipts']) await expect(db.query(`select * from public.planner_${table}`)).rejects.toThrow(/permission denied/)
+    for (const table of ['categories','projects','tasks','todos','weeks','week_items','schedules','work_logs','settings','dataset_state','operation_receipts']) await expect(db.query(`select * from public.planner_${table}`)).rejects.toThrow(/permission denied/)
     await expect(snapshot()).rejects.toThrow(/permission denied/)
     await expect(mutate({ type: 'saveCategory', value: category },0)).rejects.toThrow(/permission denied/)
     await expect(db.query('select public.planner_receipt($1)',[randomUUID()])).rejects.toThrow(/permission denied/)
@@ -61,7 +60,7 @@ describe('迁移在本地 PostgreSQL 引擎上的权限与事务检查', () => {
     await expect(db.query('delete from public.planner_categories')).rejects.toThrow(/permission denied/)
     await expect(db.query('select planner_private.lock_dataset($1)',[ownerA])).rejects.toThrow(/permission denied/)
     await actor(ownerB)
-    for (const table of ['categories','tasks','schedules','settings','dataset_state','operation_receipts']) expect((await db.query(`select * from public.planner_${table} where owner_id=$1`,[ownerA])).rows).toEqual([])
+    for (const table of ['categories','projects','tasks','todos','weeks','week_items','schedules','work_logs','settings','dataset_state','operation_receipts']) expect((await db.query(`select * from public.planner_${table} where owner_id=$1`,[ownerA])).rows).toEqual([])
     await snapshot()
     await expect(mutate({ type: 'saveTask', value: task },0)).rejects.toThrow(/foreign key/)
     await expect(mutate({ type: 'saveCategory', value: { ...category, owner_id: ownerA } },0)).rejects.toThrow('VALIDATION')
