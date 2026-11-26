@@ -47,6 +47,26 @@ export function minutesLabel(minutes: number): string {
   return hours ? `${hours} 小时${rest ? ` ${rest} 分钟` : ''}` : `${rest} 分钟`
 }
 
+export function hoursInput(minutes: number): string {
+  if (minutes % 3 === 0) return String(minutes / 60)
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`
+}
+
+export function parseHours(value: string): number | null {
+  const text = value.trim().replace(/h$/i, '').trimEnd()
+  const clock = /^(\d{1,8}):([0-5]\d)$/.exec(text)
+  if (clock) return Number(clock[1]) * 60 + Number(clock[2])
+  if (!/^(?:\d{1,8}(?:\.\d{0,4})?|\.\d{1,4})$/.test(text)) return null
+  const minutes = Number(text) * 60
+  const rounded = Math.round(minutes)
+  return Math.abs(rounded - minutes) < 1e-7 ? rounded : null
+}
+
+export function hoursLabel(minutes: number): string {
+  const value = hoursInput(minutes)
+  return value.includes(':') ? value : `${value} h`
+}
+
 export function sumMinutes<T>(rows: T[], minutes: (row: T) => number): number {
   return rows.reduce((sum, row) => sum + minutes(row), 0)
 }

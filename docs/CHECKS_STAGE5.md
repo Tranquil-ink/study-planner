@@ -1,5 +1,21 @@
 # 阶段 5 检查记录
 
+## v0.5.1 日程看板（2026-11-26，Asia/Shanghai）
+
+本地使用 Node.js 24.19.0、npm 11.9.0 和系统 Chromium。用虚构数据测试。
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run lint` | 通过。 |
+| `npm run build` | 通过，含 TypeScript 检查。Vite 仍报告 Zod 注释与主包体积警告。 |
+| `npm run test -- --run` | 8 个文件、65 项通过。验证已有阶段 5 和 5A 的升级、阶段 4 源数据、权限隔离、移动、完成和跳过、原请求重试、备份回滚与恢复。 |
+| `CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm run check:browser` | 通过。覆盖激活跨周、截止候选、容量配置、手机移动、桌面跨日拖拽、完成输入、日进度、复盘图表、双会话冲突、断网与恢复。检查 320／360／430／1280 像素。 |
+| `npm run test:integration` | 缺少隔离 Supabase 项目配置和空测试账号，退出 2，集成检查未执行。 |
+
+真实 Supabase 迁移、前端部署及安卓实机验收仍待完成。见 [Supabase 配置](SUPABASE.md) 与 [验收清单](ACCEPTANCE_STAGE5.md)。
+
+## v0.5.0 历史记录
+
 执行日期为 2026-11-19（Asia/Shanghai）。本地使用 Node.js v24.19.0、npm 11.9.0 和系统 Chromium。所有样例均为虚构数据。
 
 | 命令 | 结果 |

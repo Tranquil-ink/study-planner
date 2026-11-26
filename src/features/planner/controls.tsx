@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { dateLabel, isBusinessDate, minutesLabel, monthDay, shiftDate } from '../../domain/calendar'
-import { PRIORITY_LABEL, type PoolEntry } from '../../domain/planning'
+import { PRIORITY_LABEL, type GoalRow, type PoolEntry } from '../../domain/planning'
 import type { Dataset } from '../../domain/model'
 
 export function DateToolbar({ date, end, now, step, onChange }: {
@@ -37,4 +37,35 @@ export function EntryTag({ entry, data, now }: { entry?: PoolEntry; data: Datase
 
 export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>
+}
+
+export function AddButton({ children, disabled, onClick, label }: {
+  children: ReactNode; disabled: boolean; onClick: () => void; label?: string
+}) {
+  return <button className="add-box" type="button" disabled={disabled} onClick={onClick} aria-label={label}>
+    <span className="add-plus" aria-hidden="true">+</span>{children}
+  </button>
+}
+
+export function ProgressBar({ label, detail, ratio, tone }: {
+  label: string; detail?: string; ratio: number | null; tone?: 'warm' | 'warning'
+}) {
+  return <div className={`progress-stat ${tone ? `progress-${tone}` : ''}`}>
+    <div className="progress-caption"><span>{label}</span><strong>{detail ?? (ratio === null ? '未设置' : `${Math.round(ratio * 100)}%`)}</strong></div>
+    <progress aria-label={label} aria-valuetext={detail}
+      max={1} value={ratio === null ? 0 : Math.min(1, ratio)} />
+  </div>
+}
+
+export function GoalProgress({ row, through }: { row: GoalRow; through: string }) {
+  if (row.progress) {
+    const { current, target, unit, ratio } = row.progress
+    const position = unit === '页' ? `p${current} / p${target}` : `${current} / ${target} ${unit}`
+    return <ProgressBar label="周进度" detail={`${position} · ${Math.round(ratio * 100)}%`} ratio={ratio} />
+  }
+  if (row.entry?.kind === 'todo') {
+    const done = row.entry.completedOn && row.entry.completedOn <= through
+    return <p className={done ? 'goal-done' : 'muted'}>{done ? '已完成' : '尚未完成'}</p>
+  }
+  return <p className="muted">未设进度目标</p>
 }

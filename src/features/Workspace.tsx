@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { dataError, DataError, messageOf } from '../data/errors'
 import type { Repository } from '../data/repository'
 import { SnapshotGuard } from '../data/session-store'
-import { today, weekStart } from '../domain/calendar'
+import { today } from '../domain/calendar'
 import { subjectKey, validateCommand, type Command, type Operation, type Snapshot } from '../domain/model'
-import { entrySubject, selectedEntry } from '../domain/planning'
+import { entrySubject } from '../domain/planning'
 import type { Page } from '../navigation'
-import type { PlannerActions } from './planner/actions'
+import { editWeekItem, type PlannerActions } from './planner/actions'
 import { CalendarPage, DayPage } from './planner/DaysPage'
 import { PlannerEditor, type Editor } from './planner/PlannerEditor'
 import { PoolPage } from './planner/PoolPage'
@@ -134,39 +134,42 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
     run(command, confirmation) {
       if (snapshot && !disabled && !editor && (!confirmation || window.confirm(confirmation))) start(command, snapshot.revision)
     },
-    plan(entry) {
+    plan(week, entry) {
       if (!snapshot || disabled || editor) return
-      const week = weekStart(page.id === 'planning' ? date : now)
       const subject = entry ? entrySubject(entry) : { taskId: null, todoId: null }
       const existing = entry && snapshot.weekItems.find(i => i.weekStart === week && subjectKey(i) === subjectKey(subject))
       if (existing) {
-        setDate(week)
-        window.location.hash = 'planning'
-        setStatus('此任务已有本周目标。')
+        edit(editWeekItem(existing), { existing: true, title: existing.status === 'active' ? '编辑目标' : '设定目标' })
         return
       }
       edit({ type: 'saveWeekItem', value: { id: crypto.randomUUID(), weekStart: week, ...subject,
         minutes: entry?.kind === 'todo' ? entry.estimatedMinutes ?? 0 : 0, targetUnits: null } },
-      { title: '加入本周', lockedSubject: !!entry })
+      { title: '设定目标', lockedSubject: !!entry })
     },
-    schedule(date, subject = { taskId: null, todoId: null }, minutes = 0, units = null) {
-      if (!snapshot) return
-      const entry = selectedEntry(snapshot, subject)
-      const plannedDate = page.id === 'planning' && weekStart(now) === date && date < now ? now : date
-      edit({ type: 'saveSchedule', value: { id: crypto.randomUUID(), date: plannedDate, taskId: subject.taskId, todoId: subject.todoId,
-        title: entry?.title ?? '', plannedMinutes: minutes, plannedUnits: units, plannedRangeText: '', note: '', resolved: false } },
-      { title: '安排到一天', lockedSubject: !!entry })
+    schedule(date, period) {
+      edit({ type: 'saveSchedule', value: { id: crypto.randomUUID(), date, period, taskId: null, todoId: null,
+        title: '', plannedMinutes: 0, plannedUnits: null, plannedRangeText: '', note: '' } }, { title: '新增安排' })
     },
-    record(date, schedule, subject = schedule ?? { taskId: null, todoId: null }) {
+    complete(schedule) {
       if (!snapshot) return
-      const entry = selectedEntry(snapshot, subject)
-      edit({ type: 'saveWorkLog', value: { id: crypto.randomUUID(), date, taskId: subject.taskId, todoId: subject.todoId,
-        scheduleBlockId: schedule?.id ?? null, titleSnapshot: entry?.title ?? schedule?.title ?? '', actualMinutes: 0,
-        progressDelta: subject.taskId ? '0' : null, progressLabel: '', note: '' } }, { title: schedule ? '记实际' : '补记实际' })
+      const previous = snapshot.workLogs.filter(l => l.scheduleBlockId === schedule.id)
+        .sort((a, b) => b.date.localeCompare(a.date) || b.createdOrder - a.createdOrder)[0]
+      edit({ type: 'completeSchedule', value: { id: schedule.id, logId: previous?.id ?? crypto.randomUUID(),
+        date: previous && previous.date <= now ? previous.date : schedule.date > now ? now : schedule.date,
+        actualMinutes: previous?.actualMinutes ?? schedule.plannedMinutes, reachedUnits: null,
+        progressLabel: previous?.progressLabel ?? '', note: previous?.note ?? '' } }, { title: '记录完成情况' })
+    },
+    record(date) {
+      edit({ type: 'saveWorkLog', value: {
+        id: crypto.randomUUID(), date, taskId: null, todoId: null, scheduleBlockId: null, titleSnapshot: '',
+        actualMinutes: 0, progressDelta: null, progressLabel: '', note: '',
+      } }, { title: '补记实际' })
     },
   }
   const retry = pending && !busy && <button type="button" onClick={() => { void submit(pending, true) }}>确认并重试原请求</button>
-  const cancelEditor = () => { if (!busy && !pending && window.confirm('放弃这个表单的输入？')) { setEditor(null); setError(''); setStatus('') } }
+  const cancelEditor = () => {
+    if (!busy && !pending && (!editor?.dirty || window.confirm('放弃这个表单的输入？'))) { setEditor(null); setError(''); setStatus('') }
+  }
   const removeEditor = editor?.existing && (editor.command.type === 'saveSchedule' || editor.command.type === 'saveWorkLog')
     ? () => {
       const schedule = editor.command.type === 'saveSchedule'
