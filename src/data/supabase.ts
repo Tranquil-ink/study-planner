@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { snapshotSchema, receiptSchema, validateCommand, type Operation } from '../domain/model'
-import { backupSchema, createBackup, parseBackup } from './backup'
+import { backupSchema, createBackup } from './backup'
 import { DataError, dataError } from './errors'
 import type { Repository } from './repository'
 
@@ -58,11 +58,7 @@ export function makeRepository(client: SupabaseClient): Repository {
       if (!parsed.success) throw new DataError('validation', '备份格式不正确，不会修改云端。')
       return submit({ requestId, expectedRevision, command: { type: 'restore', value: parsed.data.data } })
     },
-    async migrate(contents, expectedRevision, requestId) {
-      let backup
-      try { backup = parseBackup(contents).backup } catch { throw new DataError('validation', '本地备份格式不受支持或未通过校验。') }
-      return repository.restore(backup, expectedRevision, requestId)
-    },
+
   }
   return repository
 }

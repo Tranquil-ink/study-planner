@@ -7,7 +7,7 @@ function subscribe(onChange: () => void) {
 }
 
 function getCurrentPage() {
-  // 原生 hash 链接支持刷新和浏览器前进／后退；未知地址回到日历。
+  // 原生 hash 链接支持刷新和浏览器前进／后退；未知地址回到今天。
   return pages.find((page) => `#${page.id}` === window.location.hash) ?? pages[0]
 }
 
