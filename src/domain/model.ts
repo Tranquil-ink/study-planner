@@ -21,6 +21,7 @@ const duration = z.number().int().min(1, '请填写大于零的分钟数').max(1
 const weeklyDuration = z.number().int().min(1, '请填写大于零的周分钟数').max(10080)
 const clock = z.iso.datetime({ offset: true })
 const audit = { createdAt: clock, updatedAt: clock }
+const activated = { activated: z.boolean() }
 const auditOrder = (row: { createdAt: string; updatedAt: string }) => Date.parse(row.updatedAt) >= Date.parse(row.createdAt)
 const subjectFields = { taskId: uuid.nullable(), todoId: uuid.nullable() }
 export type Subject = { taskId: string | null; todoId: string | null }
@@ -50,12 +51,17 @@ export const taskInputSchema = z.strictObject(taskFields).refine(withinTotal, pr
 export const todoInputSchema = z.strictObject(todoFields).refine(todoParent, '项目需要所属分类')
 export const categorySchema = categoryInputSchema.extend(audit).refine(auditOrder)
 export const projectSchema = projectInputSchema.extend(audit).refine(auditOrder)
-export const taskSchema = z.strictObject({ ...taskFields, ...audit }).refine(withinTotal, progressRule).refine(auditOrder)
-export const todoSchema = z.strictObject({ ...todoFields, ...audit, completedOn: day.nullable() }).refine(todoParent).refine(auditOrder)
+const todoAudit = { ...audit, completedOn: day.nullable() }
+const taskSchema = z.strictObject({ ...taskFields, ...audit, ...activated }).refine(withinTotal, progressRule).refine(auditOrder)
+const todoSchema = z.strictObject({ ...todoFields, ...todoAudit, ...activated }).refine(todoParent).refine(auditOrder)
 
-const capacityDay = z.number().int().min(0).max(1440)
-export const capacitySchema = z.tuple([capacityDay, capacityDay, capacityDay, capacityDay, capacityDay, capacityDay, capacityDay])
-const weekSchema = z.strictObject({ weekStart: monday, capacity: capacitySchema.nullable(), committedAt: clock.nullable() })
+const capacityMinutes = z.number().int().min(0).max(1440)
+const dayCapacity = z.tuple([capacityMinutes, capacityMinutes, capacityMinutes])
+  .refine(minutes => minutes.reduce((sum, value) => sum + value, 0) <= 1440, '每天可用时间最多 24 小时')
+const sevenDays = <T extends z.ZodType>(value: T) => z.tuple([value, value, value, value, value, value, value])
+const capacitySchema = sevenDays(dayCapacity)
+const weekFields = { weekStart: monday, committedAt: clock.nullable() }
+const weekSchema = z.strictObject({ ...weekFields, capacity: capacitySchema.nullable() })
 const weekItemFields = {
   id: uuid, weekStart: monday, ...subjectFields, minutes: weeklyDuration, targetUnits: positiveQuantity.nullable(),
 }
@@ -69,11 +75,17 @@ const weekItemSchema = z.strictObject({ ...weekItemFields, ...audit, status: wee
 
 const scheduleFields = {
   id: uuid, date: day, ...subjectFields, title: text(200), plannedMinutes: duration,
-  plannedUnits: positiveQuantity.nullable(), plannedRangeText: z.string().max(500), note: z.string().max(5000), resolved: z.boolean(),
+  plannedUnits: positiveQuantity.nullable(), plannedRangeText: z.string().max(500), note: z.string().max(5000),
 }
+export const PERIODS = ['morning', 'afternoon', 'evening'] as const
+const periodSchema = z.enum(PERIODS)
+const scheduleOutcome = z.enum(['pending', 'completed', 'skipped'])
+const scheduleInputFields = { ...scheduleFields, period: periodSchema }
 const validSchedule = (row: Subject & { plannedUnits: string | null }) => atMostOneSubject(row) && (!row.plannedUnits || !!row.taskId)
-export const scheduleInputSchema = z.strictObject(scheduleFields).refine(validSchedule, '计划量仅用于长期任务')
-const scheduleSchema = z.strictObject({ ...scheduleFields, ...audit }).refine(validSchedule).refine(auditOrder)
+const scheduleInputSchema = z.strictObject(scheduleInputFields).refine(validSchedule, '计划量仅用于长期任务')
+const scheduleSchema = z.strictObject({
+  ...scheduleInputFields, ...audit, position: z.number().int().min(0).max(2147483647), outcome: scheduleOutcome,
+}).refine(validSchedule).refine(auditOrder)
 
 const workLogFields = {
   id: uuid, date: day, ...subjectFields, scheduleBlockId: uuid.nullable(),
@@ -85,7 +97,8 @@ const validLogProgress = (v: Subject & { progressDelta: string | null }) =>
 export const workLogInputSchema = z.strictObject(workLogFields).refine(validLogProgress, '仅长期任务可以记录新增完成量')
 const workLogSchema = z.strictObject({ ...workLogFields, createdOrder: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER - 1), ...audit })
   .refine(validLogProgress).refine(auditOrder)
-export const settingsSchema = z.strictObject({ timezone: z.literal('Asia/Shanghai'), dateFormat: z.literal('YYYY-MM-DD'), capacityTemplate: capacitySchema.nullable() })
+const settingsFields = { timezone: z.literal('Asia/Shanghai'), dateFormat: z.literal('YYYY-MM-DD') }
+const settingsSchema = z.strictObject({ ...settingsFields, capacityTemplate: capacitySchema.nullable() })
 
 export function subjectKey(row: Subject): string | null {
   return row.taskId ? `task:${row.taskId}` : row.todoId ? `todo:${row.todoId}` : null
@@ -96,6 +109,14 @@ const datasetFields = {
   weeks: z.array(weekSchema), weekItems: z.array(weekItemSchema), schedules: z.array(scheduleSchema),
   workLogs: z.array(workLogSchema), settings: settingsSchema,
 }
+export const v5DatasetSchema = z.strictObject({
+  ...datasetFields,
+  tasks: z.array(z.strictObject({ ...taskFields, ...audit })),
+  todos: z.array(z.strictObject({ ...todoFields, ...todoAudit })),
+  weeks: z.array(z.strictObject({ ...weekFields, capacity: sevenDays(capacityMinutes).nullable() })),
+  schedules: z.array(z.strictObject({ ...scheduleFields, ...audit, resolved: z.boolean() })),
+  settings: z.strictObject({ ...settingsFields, capacityTemplate: sevenDays(capacityMinutes).nullable() }),
+})
 export const datasetSchema = z.strictObject(datasetFields).superRefine((data, ctx) => {
   const issue = (message: string) => ctx.addIssue({ code: 'custom', message })
   for (const rows of [data.categories, data.projects, data.tasks, data.todos, data.weekItems, data.schedules, data.workLogs]) {
@@ -119,6 +140,8 @@ export const datasetSchema = z.strictObject(datasetFields).superRefine((data, ct
     if (!weeks.has(row.weekStart) || (row.baseline && !weeks.get(row.weekStart)?.committedAt)) issue('周目标与周计划或周初基线不一致')
   }
   if (new Set(data.workLogs.map(l => l.createdOrder)).size !== data.workLogs.length) issue('实际记录创建顺序重复')
+  const positions = new Set(data.schedules.map(s => `${s.date}/${s.period}/${s.position}`))
+  if (positions.size !== data.schedules.length) issue('同一时段存在重复的安排顺序')
   const schedules = new Map(data.schedules.map(s => [s.id, s])), totals = new Map<string, bigint>()
   for (const log of data.workLogs) {
     if (log.scheduleBlockId) {
@@ -140,20 +163,35 @@ export const snapshotSchema = datasetSchema.safeExtend({ revision: revisionSchem
 export const receiptSchema = z.strictObject({ requestId: uuid, revision: revisionSchema })
 const idInput = z.strictObject({ id: uuid })
 const weekInput = z.strictObject({ weekStart: monday })
+const newEntrySchema = z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('saveTask'), value: taskInputSchema }),
+  z.strictObject({ type: z.literal('saveTodo'), value: todoInputSchema }),
+])
+const scheduledEntrySchema = z.strictObject({ entry: newEntrySchema, schedule: scheduleInputSchema })
+  .refine(({ entry, schedule }) => (entry.type === 'saveTask' ? schedule.taskId : schedule.todoId) === entry.value.id,
+    '新增任务须与日程关联一致')
+const moveScheduleSchema = idInput.extend({ date: day, period: periodSchema, beforeId: uuid.nullable() })
+  .refine(v => v.beforeId !== v.id, '请选择另一项作为移动位置')
+const completeScheduleSchema = idInput.extend({
+  logId: uuid, date: day, actualMinutes: workLogFields.actualMinutes, reachedUnits: quantitySchema.nullable(),
+  progressLabel: workLogFields.progressLabel, note: workLogFields.note,
+})
 const commandSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('saveCategory'), value: categoryInputSchema }),
   z.strictObject({ type: z.literal('saveProject'), value: projectInputSchema }),
   z.strictObject({ type: z.literal('saveTask'), value: taskInputSchema }),
   z.strictObject({ type: z.literal('saveTodo'), value: todoInputSchema }),
-  z.strictObject({ type: z.literal('completeTodo'), value: idInput.extend({ completed: z.boolean() }) }),
+  z.strictObject({ type: z.literal('setSubjectActivated'), value: idInput.extend({ kind: z.enum(['task', 'todo']), activated: z.boolean() }) }),
   z.strictObject({ type: z.literal('saveWeekItem'), value: weekItemInputSchema }),
   z.strictObject({ type: z.literal('setWeekItemStatus'), value: idInput.extend({ status: z.enum(['active', 'returned', 'cancelled']) }) }),
-  z.strictObject({ type: z.literal('carryWeekItem'), value: z.strictObject({ id: uuid, next: weekItemInputSchema }) }),
   z.strictObject({ type: z.literal('commitWeek'), value: weekInput }),
   z.strictObject({ type: z.literal('saveWeekCapacity'), value: weekInput.extend({ capacity: capacitySchema }) }),
   z.strictObject({ type: z.literal('saveCapacityTemplate'), value: z.strictObject({ capacity: capacitySchema }) }),
   z.strictObject({ type: z.literal('saveSchedule'), value: scheduleInputSchema }),
-  z.strictObject({ type: z.literal('resolveSchedule'), value: idInput.extend({ resolved: z.boolean() }) }),
+  z.strictObject({ type: z.literal('createScheduledEntry'), value: scheduledEntrySchema }),
+  z.strictObject({ type: z.literal('moveSchedule'), value: moveScheduleSchema }),
+  z.strictObject({ type: z.literal('completeSchedule'), value: completeScheduleSchema }),
+  z.strictObject({ type: z.literal('setScheduleOutcome'), value: idInput.extend({ outcome: z.enum(['pending', 'skipped']) }) }),
   z.strictObject({ type: z.literal('removeSchedule'), value: idInput }),
   z.strictObject({ type: z.literal('saveWorkLog'), value: workLogInputSchema }),
   z.strictObject({ type: z.literal('removeWorkLog'), value: idInput }),
@@ -164,6 +202,8 @@ export type ProjectInput = z.infer<typeof projectInputSchema>
 export type TaskInput = z.infer<typeof taskInputSchema>
 export type TodoInput = z.infer<typeof todoInputSchema>
 export type Capacity = z.infer<typeof capacitySchema>
+export type DayCapacity = z.infer<typeof dayCapacity>
+export type SchedulePeriod = z.infer<typeof periodSchema>
 export type Week = z.infer<typeof weekSchema>
 export type WeekItem = z.infer<typeof weekItemSchema>
 export type WeekItemInput = z.infer<typeof weekItemInputSchema>

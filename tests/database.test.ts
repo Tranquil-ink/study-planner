@@ -47,7 +47,7 @@ describe('迁移在本地 PostgreSQL 引擎上的权限与事务检查', () => {
   it('已有 5A 的库可直接升级，5A 测试计划从空白开始且账号与原任务保留', async () => {
     await actor(owner5a)
     const state = snapshotSchema.parse(await snapshot())
-    expect(state).toMatchObject({ revision: 6, todos: [], weeks: [], weekItems: [], settings: { capacityTemplate: null } })
+    expect(state).toMatchObject({ revision: 7, todos: [], weeks: [], weekItems: [], settings: { capacityTemplate: null } })
     expect(state.categories.map(c => c.id)).toEqual([category.id])
     expect(state.tasks.map(t => t.id)).toEqual([legacyTask.id])
     await mutate({ type: 'saveTodo', value: todo }, state.revision)

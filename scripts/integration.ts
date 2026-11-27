@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import type { Command, Dataset, Snapshot } from '../src/domain/model'
+import type { Command, Dataset, ScheduleInput, Snapshot } from '../src/domain/model'
 
 const required = ['SUPABASE_TEST_URL', 'SUPABASE_TEST_PUBLIC_KEY', 'SUPABASE_TEST_PROJECT_REF', 'SUPABASE_TEST_EMAIL_A',
   'SUPABASE_TEST_PASSWORD_A', 'SUPABASE_TEST_EMAIL_B', 'SUPABASE_TEST_PASSWORD_B']
@@ -45,7 +45,7 @@ async function signIn(c: SupabaseClient, suffix: 'A' | 'B') {
 async function snapshot(c: SupabaseClient): Promise<Snapshot> {
   const result = await c.rpc('planner_snapshot')
   assert.equal(result.error, null, '读取 RPC 失败')
-  assert.ok(result.data && dataKeys.every(k => Array.isArray(result.data[k])), '测试库尚未升级到按天排程结构')
+  assert.ok(result.data && dataKeys.every(k => Array.isArray(result.data[k])), '测试库尚未升级到日程看板结构')
   return result.data as Snapshot
 }
 function business(s: Snapshot): Dataset {
@@ -89,20 +89,25 @@ try {
   await save(phone, { type: 'saveProject', value: project })
   await save(phone, { type: 'saveTask', value: task })
   await save(computer, { type: 'saveTodo', value: todo })
-  await save(computer, { type: 'saveCapacityTemplate', value: { capacity: [120,120,120,120,120,0,0] } })
+  await save(phone, { type: 'setSubjectActivated', value: { id: task.id, kind: 'task', activated: true } })
+  await save(computer, { type: 'saveCapacityTemplate',
+    value: { capacity: [[60,30,30],[60,30,30],[60,30,30],[60,30,30],[60,30,30],[0,0,0],[0,0,0]] } })
   const goal = { id: randomUUID(), weekStart: week, taskId: task.id, todoId: null, minutes: 240, targetUnits: '30' }
   await save(phone, { type: 'saveWeekItem', value: goal })
   await save(phone, { type: 'commitWeek', value: { weekStart: week } })
   await save(phone, { type: 'saveWeekItem', value: { ...goal, targetUnits: '6' } })
-  const schedule = { id: randomUUID(), date: now, taskId: task.id, todoId: null, title: task.title,
-    plannedMinutes: 120, plannedUnits: '10', plannedRangeText: '', note: '', resolved: false }
+  const schedule: ScheduleInput = { id: randomUUID(), date: now, period: 'morning', taskId: task.id, todoId: null, title: task.title,
+    plannedMinutes: 120, plannedUnits: '10', plannedRangeText: '', note: '' }
+  const todoSchedule: ScheduleInput = { ...schedule, id: randomUUID(), period: 'afternoon', taskId: null, todoId: todo.id,
+    title: todo.title, plannedUnits: null, plannedMinutes: 60 }
   await save(phone, { type: 'saveSchedule', value: schedule })
-  await save(computer, { type: 'saveSchedule', value: { ...schedule, id: randomUUID(), taskId: null, todoId: todo.id,
-    title: todo.title, plannedUnits: null, plannedMinutes: 60 } })
-  const workLog = { id: randomUUID(), date: now, taskId: task.id, todoId: null, scheduleBlockId: schedule.id,
-    titleSnapshot: task.title, actualMinutes: 80, progressDelta: '6', progressLabel: '第 6 页', note: '' }
+  await save(computer, { type: 'saveSchedule', value: todoSchedule })
+  await save(phone, { type: 'moveSchedule', value: { id: todoSchedule.id, date: now, period: 'evening', beforeId: null } })
+  await save(computer, { type: 'setScheduleOutcome', value: { id: todoSchedule.id, outcome: 'skipped' } })
+  const completion = { id: schedule.id, logId: randomUUID(), date: now, actualMinutes: 80,
+    reachedUnits: '6', progressLabel: '第 6 页', note: '' }
   const rev = (await snapshot(phone)).revision, requestId = randomUUID()
-  const logCommand = { type: 'saveWorkLog', value: workLog }
+  const logCommand = { type: 'completeSchedule', value: completion }
   loseResponse = true
   await write(phone, rev, logCommand, requestId)
   const confirmed = await computer.rpc('planner_receipt', { p_request_id: requestId })
@@ -114,6 +119,11 @@ try {
   assert.equal(after.workLogs[0].actualMinutes, 80)
   assert.equal(after.schedules.length, 2)
   assert.equal(after.schedules.find(r => r.id === schedule.id)?.plannedMinutes, 120)
+  assert.equal(after.schedules.find(r => r.id === schedule.id)?.outcome, 'completed')
+  assert.equal(after.schedules.find(r => r.id === todoSchedule.id)?.outcome, 'skipped')
+  assert.equal(after.schedules.find(r => r.id === todoSchedule.id)?.period, 'evening')
+  assert.equal(after.tasks[0].activated, true)
+  assert.equal(after.todos[0].completedOn, null)
   assert.equal(Number(after.weekItems[0].baseline?.targetUnits), 30)
   assert.equal(Number(after.weekItems[0].targetUnits), 6)
   assert.match((await write(phone, rev, { type: 'saveTodo', value: todo })).error?.message ?? '', /REVISION_CONFLICT/)

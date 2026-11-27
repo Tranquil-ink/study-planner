@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { datasetSchema, workLogInputSchema, type WorkLog } from '../src/domain/model'
 import { taskProgress } from '../src/domain/work-logs'
 import { createBackup, parseBackup } from '../src/data/backup'
-import { audit, fixtureData, schedule, task } from './fixtures'
+import { audit, fixtureData, schedule, scheduled, task } from './fixtures'
 const row = (patch: Partial<WorkLog> = {}): WorkLog => ({ id: randomUUID(), date: '2026-10-25', taskId: task.id, todoId: null, scheduleBlockId: null, titleSnapshot: task.title, actualMinutes: 80, progressDelta: '1.5', progressLabel: '2.2', note: '', createdOrder: 1, ...audit, ...patch })
 describe('实际记录的精确进度、日期与备份', () => {
   it('8 → 9.5 → 9 → 8；编辑替换原记录，零进度仍计投入', () => {
@@ -30,11 +30,11 @@ describe('实际记录的精确进度、日期与备份', () => {
     expect(workLogInputSchema.safeParse({ ...input, taskId: null, progressDelta: null }).success).toBe(true)
   })
   it('备份检验全部记录的总量、顺序、引用和关联任务，日期可与计划不同', () => {
-    const data = { ...fixtureData(), schedules: [{ ...schedule, ...audit }], workLogs: [row({ scheduleBlockId: schedule.id })] }
+    const data = { ...fixtureData(), schedules: [scheduled], workLogs: [row({ scheduleBlockId: schedule.id })] }
     expect(datasetSchema.safeParse(data).success).toBe(true)
     for (const workLogs of [[row({ progressDelta: '32.000001' })], [row(), row()], [row({ taskId: randomUUID() })], [row({ scheduleBlockId: randomUUID() })], [row({ scheduleBlockId: schedule.id, taskId: null, progressDelta: null })]]) expect(datasetSchema.safeParse({ ...data, workLogs }).success).toBe(false)
     const backup = createBackup({ ...data, revision: 1 })
-    expect(backup.schemaVersion).toBe(5)
+    expect(backup.schemaVersion).toBe(6)
     expect(parseBackup(JSON.stringify(backup)).data).toEqual(data)
     const withoutLogs = { ...data, workLogs: undefined }
     expect(() => parseBackup(JSON.stringify({ ...backup, data: withoutLogs }))).toThrow()

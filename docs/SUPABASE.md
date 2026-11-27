@@ -1,34 +1,36 @@
-# Supabase 配置与阶段 5 升级
+# Supabase 配置与日程看板升级
 
-可复用已执行阶段 4 或阶段 5A 迁移的隔离测试项目及其账号。Git 分支和数据库迁移历史独立。PR #7 的阶段 5A SQL 即使尚未合并，也可能已经在 Supabase 执行。
+## 现有阶段 5 项目升级
 
-## 升级现有测试项目
+1. 在 v0.5.0 的「数据设置」导出一份当前数据。关闭正在编辑的旧版页面。
+2. 在原项目的 SQL Editor 执行 [202611260001_schedule_board.sql](../supabase/migrations/202611260001_schedule_board.sql) 一次。
+3. 迁移成功后部署 v0.5.1 前端，再在两台设备重新打开页面，核对日程、本周目标、实际记录和备份。迁移与前端部署应连续执行，因为读取格式随版本变化。
 
-1. 确认目标为已经完成阶段 4 的隔离测试项目。关闭正在编辑的旧版页面。如果想留存 5A 的测试待办、周计划或容量模板，可先用 5A 前端导出备份。
-2. 使用 SQL Editor 的项目只需执行 [PR #8 最新版阶段 5 迁移](../supabase/migrations/202611190001_week_planner.sql) 一次。已运行 5A 的库也用这份 SQL。它会识别 5A，在同一事务中替换其待办、周计划和容量模板的表及函数。
-3. 检查迁移成功后构建并更新测试前端。两端重新打开页面，验证「今天」「本周」「日历」及数据设置。
-4. 可选地保存一份升级前的数据库快照，留作运行旧前端时的参考。Git 只能切回代码。阶段 4 的前端与新版数据库不能混用。
+迁移保留账号、任务、原周目标、已保存安排、实际记录和回执。旧安排和旧每日容量统一归到上午，旧安排原顺序及日容量总和不变。旧「已处理」且有关联实际的安排视为已完成，其余旧「已处理」安排视为未做。已有任务的激活初始为关闭，已保存的周目标仍会显示。新版导出 v6 备份，恢复支持阶段 5 的 v5 备份。
 
-迁移保留 Auth 用户、分类、长期任务、实际记录及旧日程的日期和计划分钟数。5A 的测试待办、周计划和容量模板从空白开始。v5 仅导入本版备份。
-
-可在 SQL Editor 用以下只读查询确认当前结构。阶段 5A 已应用时出现 `stage_5a`，阶段 5 已应用时出现 `stage_5`。
+可用只读查询核对升级位置。
 
 ```sql
-select to_regclass('public.planner_week_plans') as stage_5a,
-       to_regclass('public.planner_weeks') as stage_5;
+select to_regclass('public.planner_weeks') as stage_5,
+       exists (
+         select 1 from information_schema.columns
+         where table_schema = 'public' and table_name = 'planner_schedules' and column_name = 'period'
+       ) as schedule_board;
 ```
 
-使用 CLI 管理的项目，在 PR #8 分支运行 `supabase migration list` 对照版本，然后运行 `supabase db push`。仓库已保留 5A 的原始 `202611010001_stage5a.sql`。如果核实它已通过 SQL Editor 完整执行，且远端迁移历史中没有该版本，先运行 `supabase migration repair 202611010001 --status applied` 登记。其他手动执行的版本同样需要先核实并对齐历史。已登记的迁移由 CLI 跳过。
+通过 CLI 管理时，先用 `supabase migration list` 对照远端，再用 `supabase db push`。对已经由 SQL Editor 完整执行且未登记的迁移，核实版本后可用 `supabase migration repair <版本号> --status applied` 登记，避免重复执行。
+
+## 阶段 4 或 5A 项目
+
+先执行 [202611190001_week_planner.sql](../supabase/migrations/202611190001_week_planner.sql)，再执行日程看板迁移。第一步会识别已执行 5A 的库，在事务中替换该阶段的测试待办、周计划及容量模板。仓库保留 [202611010001_stage5a.sql](../supabase/migrations/202611010001_stage5a.sql) 以对照已有迁移记录。
 
 ## 空项目安装
 
-按文件名顺序执行 `supabase/migrations/` 的全部六份迁移。使用现有项目时无需重新建数据库或新仓库。正式开始保存真实记录时，可按需建立独立正式项目，并把现有测试项目继续用于验证。
-
-在 Supabase Auth 中关闭公开注册和匿名登录，创建授权使用者。前端的 `VITE_SUPABASE_URL` 与 `VITE_SUPABASE_PUBLISHABLE_KEY` 为公开配置，后者使用 publishable key 或旧 anon key。管理密钥和数据库密码仅在受控管理端使用。测试网址需为手机和电脑均能访问的 HTTPS。
+按文件名顺序执行 `supabase/migrations/` 中的全部迁移。在 Supabase Auth 中关闭公开注册和匿名登录，创建授权账号。前端的 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_PUBLISHABLE_KEY` 使用项目 URL 及公开 publishable key 或旧 anon key。测试网址使用手机和电脑均可访问的 HTTPS。
 
 ## 真实云端集成
 
-使用升级后的隔离测试项目，创建两个空测试账号 A/B。通过环境配置或本地未跟踪的 `.env.integration` 提供下列变量。
+准备已升级的隔离 Supabase 项目和两个空测试账号 A/B。通过环境配置或本地未跟踪的 `.env.integration` 提供变量。
 
 ```text
 SUPABASE_TEST_URL
@@ -41,6 +43,6 @@ SUPABASE_TEST_PASSWORD_B
 SUPABASE_TEST_ACK=isolated-disposable
 ```
 
-运行 `npm run test:integration`。脚本先检查账号为空，随后验证两会话取数、匿名与跨账号隔离、受控写入、过期版本、原请求重试和恢复回滚。结束时尝试恢复 A 账号的空业务数据。缺配置会退出 2。本地测试与浏览器模拟不代表通过真实云端或安卓实机。
+`npm run test:integration` 检查两会话取数、移动与完成、账号隔离、权限、过期版本、重试回执和恢复回滚。脚本验证两账号为空并在结束时尝试恢复 A 的空业务数据。缺配置时退出 2。
 
-数据库变更及备份字段见 [数据模型](DATA_MODEL.md)。阶段 0～4 的验证与部署信息见 [历史进度](PROGRESS.md)。
+[数据模型](DATA_MODEL.md) · [验收步骤](ACCEPTANCE_STAGE5.md)

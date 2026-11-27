@@ -1,115 +1,96 @@
-import { useState } from 'react'
-import { minutesLabel, shiftDate } from '../../domain/calendar'
-import { displayQuantity, subjectKey, type Capacity, type Dataset } from '../../domain/model'
-import { capacityFor, entrySubject, isPlannable, poolEntries, sortPool, WEEK_STATUS, weekSummary } from '../../domain/planning'
-import { editWeekItem, type PlannerActions } from './actions'
-import { DateToolbar, Empty, EntryTag, Metric } from './controls'
+import { hoursLabel } from '../../domain/calendar'
+import { subjectKey, type Dataset } from '../../domain/model'
+import { capacityFor, dueWithinTwoWeeks, emptyCapacity, entrySubject, isPlannable, poolEntries, weekCandidates,
+  WEEK_STATUS, weekSummary, type GoalRow } from '../../domain/planning'
+import type { PlannerActions } from './actions'
+import { DateToolbar, Empty, EntryTag, GoalProgress, Metric } from './controls'
 
-type GoalRow = ReturnType<typeof weekSummary>['items'][number]
-
-function GoalCard({ row, data, now, actions, nextWeek }: {
-  row: GoalRow; data: Dataset; now: string; actions: PlannerActions; nextWeek: string | null
+function GoalCard({ row, data, now, through, actions }: {
+  row: GoalRow; data: Dataset; now: string; through: string; actions: PlannerActions
 }) {
-  const { entry, item } = row
-  const unit = entry?.kind === 'task' ? entry.unitName : ''
+  const { entry, item, budget } = row
   const active = item.status === 'active'
-  const nextExists = data.weekItems.some(i => i.weekStart === nextWeek && subjectKey(i) === subjectKey(item))
-  const canCarry = !!nextWeek && !nextExists && entry && isPlannable(entry, data) && !row.current.reached
-  return <article className="goal-card">
+  return <article className="goal-card goal-list-card">
     <div className="card-title">
-      <h3>{entry?.title}</h3>
-      <span className={`tag ${active && row.needsMore ? 'tag-warning' : 'tag-accent'}`}>{active ? row.scheduling : WEEK_STATUS[item.status]}</span>
+      <div><h3>{entry?.title}</h3><EntryTag entry={entry} data={data} now={now} /></div>
+      {!active && <span className="tag">{WEEK_STATUS[item.status]}</span>}
     </div>
-    <EntryTag entry={entry} data={data} now={now} />
-    <p className="item-detail"><span>本周计划 <strong>{minutesLabel(item.minutes)}{item.targetUnits && ` · ${displayQuantity(item.targetUnits)} ${unit}`}</strong></span>
-      <span>已排 {minutesLabel(row.plannedMinutes)}</span><span>实际 {minutesLabel(row.actualMinutes)}{unit && ` · ${row.actualUnits} ${unit}`}</span></p>
-    {active && !row.current.reached && <p className="goal-gap">
-      {row.missingUnits !== null
-        ? `未来已覆盖 ${row.futureUnits} ${unit}，仍需安排 ${row.missingUnits} ${unit}`
-        : `归入未来安排 ${minutesLabel(row.futureMinutes)}，剩余未排 ${minutesLabel(row.missingMinutes)}`}
-      {row.missed > 0 && ` · ${row.missed} 项过去的安排待处理`}
-    </p>}
-    {!item.baseline && data.weeks.find(w => w.weekStart === item.weekStart)?.committedAt && <span className="tag">周中新增</span>}
-    {active ? <div className="actions card-actions">
-      {entry && isPlannable(entry, data) && <button disabled={actions.disabled} onClick={() => actions.schedule(item.weekStart, item,
-        row.missingMinutes > 0 ? Math.min(1440, row.missingMinutes) : 0,
-        row.missingUnits && row.missingUnits !== '0' ? row.missingUnits : null)}>安排到一天</button>}
-      <button className="button-text" disabled={actions.disabled} onClick={() => actions.edit(editWeekItem(item), { existing: true })}>编辑目标</button>
-      {entry?.kind === 'todo' && !entry.completedOn && <button className="button-text" disabled={actions.disabled}
-        onClick={() => actions.run({ type: 'completeTodo', value: { id: entry.id, completed: true } })}>完成待办</button>}
-      {canCarry && <button className="button-text" disabled={actions.disabled} onClick={() => actions.edit({
-        type: 'carryWeekItem', value: { id: item.id, next: { id: crypto.randomUUID(), weekStart: nextWeek, taskId: item.taskId, todoId: item.todoId,
-          minutes: item.targetUnits !== null ? item.minutes : row.leftMinutes || item.minutes,
-          targetUnits: row.leftUnits && row.leftUnits !== '0' ? row.leftUnits : null } },
-      })}>结转下周</button>}
-      <details className="inline-menu"><summary>更多</summary><div className="actions">
-        <button disabled={actions.disabled} onClick={() => actions.run({ type: 'setWeekItemStatus', value: { id: item.id, status: 'returned' } }, '将此目标退回任务池？已保存的安排和实际记录会保留。')}>退回待办</button>
-        <button disabled={actions.disabled} onClick={() => actions.run({ type: 'setWeekItemStatus', value: { id: item.id, status: 'cancelled' } }, '取消本周目标？周初承诺、已有安排和实际记录会保留。')}>取消本周目标</button>
-      </div></details>
-    </div> : item.status !== 'carried' && entry && isPlannable(entry, data) && <button disabled={actions.disabled}
-      onClick={() => actions.run({ type: 'setWeekItemStatus', value: { id: item.id, status: 'active' } })}>重新加入本周</button>}
+    <dl className="goal-budget">
+      <div><dt>本周计划</dt><dd>{hoursLabel(item.minutes)}</dd></div>
+      <div><dt>{budget >= 0 ? '预算剩余' : '超出预算'}</dt><dd className={budget < 0 ? 'warning-text' : ''}>{hoursLabel(Math.abs(budget))}</dd></div>
+    </dl>
+    <GoalProgress row={row} through={through} />
+    {active && entry && <div className="actions">
+      <button disabled={actions.disabled} onClick={() => actions.plan(item.weekStart, entry)}>编辑目标</button>
+      <button className="button-text" disabled={actions.disabled} onClick={() => actions.run({
+        type: 'setWeekItemStatus', value: { id: item.id, status: 'cancelled' },
+      }, '取消本周目标？已有安排和实际记录会保留。')}>取消目标</button>
+    </div>}
   </article>
 }
 
 export function WeekPage({ data, date, now, setDate, actions }: {
   data: Dataset; date: string; now: string; setDate: (date: string) => void; actions: PlannerActions
 }) {
-  const [filter, setFilter] = useState(false)
   const summary = weekSummary(data, date, now), { week, end } = summary
-  const nextWeek = shiftDate(week, 7)
-  const planned = new Set(summary.items.map(r => subjectKey(r.item)))
-  const pool = poolEntries(data).filter(e => isPlannable(e, data))
-  const due = sortPool(pool.filter(e => e.dueDate && e.dueDate <= end && !planned.has(subjectKey(entrySubject(e)))), now, end)
-  const targets = summary.items.filter(r => r.item.status === 'active')
-  const edited = summary.items.filter(r => r.item.status !== 'active')
-  const byPriority = new Map(sortPool(targets.flatMap(r => r.entry ? [r.entry] : []), now, end).map((e, i) => [subjectKey(entrySubject(e)), i]))
-  targets.sort((a, b) => {
-    const rank = (r: GoalRow) => r.entry?.dueDate && r.entry.dueDate <= end && !r.current.reached ? 0 : r.current.reached ? 3 : r.needsMore ? 1 : 2
-    return rank(a) - rank(b) || (byPriority.get(subjectKey(a.item)) ?? 0) - (byPriority.get(subjectKey(b.item)) ?? 0)
-  })
+  const targets = summary.items.filter(row => row.item.status === 'active')
+  const history = summary.items.filter(row => row.item.status !== 'active')
+  const hiddenSubjects = new Set(summary.items.filter(r => r.item.status === 'active' || r.item.status === 'carried').map(r => subjectKey(r.item)))
+  const candidates = weekCandidates(data, week, now)
+  const visible = new Set([...hiddenSubjects, ...candidates.map(e => subjectKey(entrySubject(e)))])
+  const hasMore = poolEntries(data).some(entry => isPlannable(entry, data) && !visible.has(subjectKey(entrySubject(entry))))
   const capacity = capacityFor(data, week, now)
-  const emptyCapacity: Capacity = [0, 0, 0, 0, 0, 0, 0]
+  const template = data.settings.capacityTemplate
   const overload = summary.capacity === null ? 0 : Math.max(summary.plannedMinutes - summary.capacity, 0)
-  const hasUnestimated = pool.filter(e => e.kind === 'todo' && e.estimatedMinutes === null && !planned.has(subjectKey(entrySubject(e)))).length
   return <div className="stack">
     <DateToolbar date={week} end={end} now={now} step={7} onChange={setDate} />
     <section className="panel stack" aria-label="本周容量">
-      <div className="section-heading"><div><h2>时间容量</h2><p className="muted">{capacity === null ? '给这周设定每天可用的学习时间。' : summary.leftCapacity !== null ? `从今天起还可排 ${minutesLabel(summary.leftCapacity)}` : ''}</p></div>
-        <div className="actions">
-          <button disabled={actions.disabled} onClick={() => actions.edit({ type: 'saveWeekCapacity', value: { weekStart: week, capacity: [...(capacity ?? data.settings.capacityTemplate ?? emptyCapacity)] } })}>调整本周</button>
-          <button disabled={actions.disabled} className="button-text" onClick={() => actions.edit({ type: 'saveCapacityTemplate', value: { capacity: [...(data.settings.capacityTemplate ?? capacity ?? emptyCapacity)] } })}>常规模板</button>
-        </div>
-      </div>
-      <div className="metrics">
-        <Metric label="每周可用" minutes={summary.capacity} />
-        <Metric label="本周计划" minutes={summary.plannedMinutes} tone={overload ? 'warning' : undefined} />
-        <Metric label="已排日历" minutes={summary.scheduledMinutes} />
-        <Metric label="实际投入" minutes={summary.actualMinutes} tone="accent" />
-      </div>
-      {overload > 0 && <p className="notice notice-warning" role="status">本周计划超出容量 {minutesLabel(overload)}。可以减少目标、增加容量或保留当前计划。</p>}
-      {hasUnestimated > 0 && <p className="muted">任务池还有 {hasUnestimated} 项未纳入本周的待办待估算。</p>}
-    </section>
-    {due.length > 0 && <section className="panel stack">
-      <h2>本周到期及逾期 · 尚未纳入计划</h2>
-      {due.map(e => <div className="list-row" key={subjectKey(entrySubject(e))}><div><strong>{e.title}</strong><EntryTag entry={e} data={data} now={now} /></div>
-        <button disabled={actions.disabled} onClick={() => actions.plan(e)}>加入本周</button></div>)}
-    </section>}
-    <section className="panel stack" aria-label="本周目标">
       <div className="section-heading">
-        <div><h2>本周目标</h2><p className="muted">{summary.committedAt ? '已保存周初计划。调整与新增会在复盘中分别展示。' : '先选重点并估时，确认后保留周初目标供复盘。'}</p></div>
+        <h2>本周可用时间</h2>
         <div className="actions">
-          <button disabled={actions.disabled || !pool.some(e => !planned.has(subjectKey(entrySubject(e))))} className="button-primary" onClick={() => actions.plan()}>＋ 加入本周</button>
-          {!summary.committedAt && <button disabled={actions.disabled || !targets.length}
-            onClick={() => actions.run({ type: 'commitWeek', value: { weekStart: week } }, '确认当前列出的目标为本周初始计划？后续仍可调整，复盘会保留此版本。')}>确认周初计划</button>}
+          <button disabled={actions.disabled || template === null} onClick={() => {
+            if (template) actions.run({ type: 'saveWeekCapacity', value: { weekStart: week, capacity: template } })
+          }}>采用默认配置</button>
+          <button disabled={actions.disabled} onClick={() => actions.edit({
+            type: 'saveWeekCapacity', value: { weekStart: week, capacity: capacity ?? template ?? emptyCapacity() },
+          }, { title: '本周临时配置' })}>本周临时配置</button>
+          <button disabled={actions.disabled} className="button-text" onClick={() => actions.edit({
+            type: 'saveCapacityTemplate', value: { capacity: template ?? emptyCapacity() },
+          }, { title: '编辑默认配置' })}>编辑默认配置</button>
         </div>
       </div>
-      <label className="check"><input type="checkbox" checked={filter} onChange={e => setFilter(e.target.checked)} />只看仍需安排</label>
-      {!targets.length && <Empty>本周还没有目标。可以从任务池挑选长期任务或一次性待办。</Empty>}
-      {targets.length > 0 && filter && !targets.some(r => r.needsMore) && <Empty>本周没有待安排的目标。</Empty>}
-      {targets.filter(r => !filter || r.needsMore).map(row => <GoalCard key={row.item.id} row={row} data={data} now={now} actions={actions} nextWeek={nextWeek} />)}
-      {!filter && edited.length > 0 && <details className="history-details">
-        <summary>已调整的目标（{edited.length}）</summary>
-        {edited.map(row => <GoalCard key={row.item.id} row={row} data={data} now={now} actions={actions} nextWeek={nextWeek} />)}
+      <div className="metrics metrics-three">
+        <Metric label="每周可用" minutes={summary.capacity} />
+        <Metric label="目标计划" minutes={summary.plannedMinutes} tone={overload ? 'warning' : undefined} />
+        <Metric label="已安排" minutes={summary.scheduledMinutes} />
+      </div>
+      {overload > 0 && <p className="notice notice-warning" role="status">目标计划超出本周容量 {hoursLabel(overload)}。</p>}
+    </section>
+    <section className="panel stack" aria-label="本周目标清单">
+      <div className="section-heading">
+        <h2>目标清单</h2>
+        <div className="actions">
+          <button disabled={actions.disabled || !hasMore} onClick={() => actions.plan(week)}>＋ 选择本周任务</button>
+          {!summary.committedAt && <button disabled={actions.disabled || !targets.length}
+            onClick={() => actions.run({ type: 'commitWeek', value: { weekStart: week } }, '保存此时的目标供复盘对照？')}>确认周初计划</button>}
+        </div>
+      </div>
+      {!targets.length && !candidates.length && <Empty>在任务池激活任务，或在这里选择本周任务。</Empty>}
+      <div className="goal-list">
+        {targets.map(row => <GoalCard key={row.item.id} row={row} data={data} now={now} through={summary.through} actions={actions} />)}
+        {candidates.map(entry => <article className="goal-card goal-list-card" key={subjectKey(entrySubject(entry))}>
+          <div className="card-title">
+            <div><h3>{entry.title}</h3><EntryTag entry={entry} data={data} now={now} /></div>
+            <span className="tag tag-accent">{dueWithinTwoWeeks(entry, week) ? '近两周截止' : '已激活'}</span>
+          </div>
+          <div className="item-detail">本周计划与预算待设置</div>
+          <button className="button-primary" disabled={actions.disabled} onClick={() => actions.plan(week, entry)}>设定目标</button>
+        </article>)}
+      </div>
+      {history.length > 0 && <details className="history-details">
+        <summary>历史调整（{history.length}）</summary>
+        <div className="goal-list">{history.map(row =>
+          <GoalCard key={row.item.id} row={row} data={data} now={now} through={summary.through} actions={actions} />)}</div>
       </details>}
     </section>
   </div>
