@@ -166,14 +166,14 @@ function WeeklyGoals({ week, data, now }: { week: ReturnType<typeof weekSummary>
   return <section className="board-goals" aria-label="日程中的本周目标">
     <div className="board-goals-header"><h2>本周目标</h2><a href="#planning">{goals.length ? '查看本周目标' : '设定本周目标'}</a></div>
     {(goals.length > 0 || candidates.length > 0) && <div className="board-goals-items">
-      {goals.map(row => <article key={row.item.id} className="board-goal">
+      {goals.map(row => <article key={subjectKey(row.item)} className="board-goal">
         <div className="board-goal-heading">
           <h3>{row.entry?.title}</h3>
           <span className={row.budget < 0 ? 'warning-text' : ''}>
             {row.budget < 0 ? '超出预算' : '预算剩余'} <strong>{hoursLabel(Math.abs(row.budget))}</strong>
           </span>
         </div>
-        <GoalProgress row={row} through={week.through} />
+        <GoalProgress row={row} />
       </article>)}
       {candidates.map(entry => <article key={subjectKey(entrySubject(entry))} className="board-goal">
         <div className="board-goal-heading"><h3>{entry.title}</h3><span>待设目标</span></div>

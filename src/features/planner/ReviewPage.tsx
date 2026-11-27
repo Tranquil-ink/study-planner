@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { hoursLabel, minutesLabel, monthDay } from '../../domain/calendar'
-import { displayQuantity, type Dataset } from '../../domain/model'
+import { displayQuantity, subjectKey, type Dataset } from '../../domain/model'
 import { averageGoalRates, recentWeeks, studyBreakdown, WEEK_STATUS, weekSummary } from '../../domain/planning'
 import { taskProgress } from '../../domain/work-logs'
 import { DateToolbar, Empty, GoalProgress, Metric, ProgressBar } from './controls'
@@ -42,15 +42,17 @@ export function ReviewPage({ data, date, now, setDate }: { data: Dataset; date: 
         const unit = entry?.kind === 'task' ? entry.unitName : ''
         const describe = (minutes: number, units: string | null) => units
           ? `${displayQuantity(units)} ${unit} · ${hoursLabel(minutes)}` : hoursLabel(minutes)
-        return <article className="goal-card" key={item.id}>
+        return <article className="goal-card" key={subjectKey(item)}>
           <div className="card-title"><h3>{entry?.title}</h3>
             {item.status !== 'active' && <span className="tag">{WEEK_STATUS[item.status]}</span>}</div>
           <dl className="report-fields">
-            <div><dt>周初目标</dt><dd>{item.baseline ? `${describe(item.baseline.minutes, item.baseline.targetUnits)} · ${original?.percent ?? 0}%` : '未确认'}</dd></div>
+            <div><dt>周初目标</dt><dd>{item.baseline ? <>
+              {describe(item.baseline.minutes, item.baseline.targetUnits)}{entry?.kind !== 'recurring' && ` · ${original?.percent ?? 0}%`}
+            </> : '未确认'}</dd></div>
             <div><dt>{item.status === 'active' ? '当前目标' : '最后计划'}</dt><dd>{describe(item.minutes, item.targetUnits)}</dd></div>
             <div><dt>实际</dt><dd>{hoursLabel(actualMinutes)}{unit && ` · 新增 ${actualUnits} ${unit}`}</dd></div>
           </dl>
-          <GoalProgress row={row} through={summary.through} />
+          <GoalProgress row={row} />
         </article>
       })}</div>
     </section>

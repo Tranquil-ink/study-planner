@@ -48,12 +48,14 @@ export function BackupPanel({ repository, snapshot, disabled, refresh, restore, 
     <button disabled={disabled || busy} onClick={() => { void exportFile() }}>从云端导出完整 JSON</button>
     <p>本页上次成功生成文件：{lastExport ? new Date(lastExport).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未生成'}</p>
     <p className="muted">浏览器不能确认文件是否最终存入下载目录。此时间仅在当前页面保留。</p>
-    <label>选择 v5 或 v6 备份文件<input type="file" accept=".json,application/json" disabled={disabled || busy} onChange={e => { void preflight(e.target.files?.[0]); e.target.value = '' }} /></label>
+    <label>选择 v5、v6 或 v7 备份文件<input type="file" accept=".json,application/json" disabled={disabled || busy} onChange={e => { void preflight(e.target.files?.[0]); e.target.value = '' }} /></label>
     {busy && <p role="status">正在读取并校验…</p>}
     {error && <p role="alert">{error}</p>}
     {preview && <div className="notice stack">
       <h3>备份恢复预览</h3>
-      <p>文件包含 {preview.backup.data.tasks.length} 项长期任务、{preview.backup.data.todos.length} 项待办、{preview.backup.data.weekItems.length} 个周目标、{preview.backup.data.schedules.length} 个安排和 {preview.backup.data.workLogs.length} 条实际记录。</p>
+      <p>文件包含 {preview.backup.data.tasks.length} 项长期任务、{preview.backup.data.todos.filter(t => t.recursWeekly).length} 项周期任务、
+        {preview.backup.data.todos.filter(t => !t.recursWeekly).length} 项待办、{preview.backup.data.weekItems.length} 个周目标、
+        {preview.backup.data.schedules.length} 个安排和 {preview.backup.data.workLogs.length} 条实际记录。</p>
       <p>恢复会完整替换当前账号的数据。建议先导出现有数据。</p>
       <label className="check"><input type="checkbox" disabled={disabled} checked={checked} onChange={e => setChecked(e.target.checked)} />我确认替换当前账号全部业务数据与设置</label>
       {preview.base !== snapshot.revision && <p role="alert">云端版本已改变，请重新选择文件并预检。</p>}

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { dateLabel, hoursInput, hoursLabel, minutesLabel, parseHours, sumMinutes, WEEKDAYS } from '../../domain/calendar'
-import { PERIODS, quantitySchema, quantityTicks, subjectKey, type Capacity, type Command, type Dataset, type ScheduleInput,
+import { PERIODS, quantityTicks, subjectKey, type Capacity, type Command, type Dataset, type ScheduleInput,
   type SchedulePeriod, type Subject } from '../../domain/model'
-import { entrySubject, isPlannable, PERIOD_LABEL, poolEntries, PRIORITY_LABEL, progressBeforeWeek, selectedEntry, sortPool,
-  weekCandidates } from '../../domain/planning'
+import { ENTRY_LABEL, entrySubject, isPlannable, PERIOD_LABEL, poolEntries, PRIORITY_LABEL, progressBeforeWeek, selectedEntry, sortPool,
+  weekCandidates, weekGoalItems, weekTargetDelta, type PoolEntry } from '../../domain/planning'
 import { taskProgress, ticksQuantity } from '../../domain/work-logs'
-import { newTask, newTodo } from './actions'
+import { newRecurringTask, newTask, newTodo } from './actions'
 
 type EditableCommand = Extract<Command, { type: 'saveCategory' | 'saveProject' | 'saveTask' | 'saveTodo'
   | 'saveSchedule' | 'createScheduledEntry' | 'moveSchedule' | 'completeSchedule' | 'saveWorkLog'
@@ -20,10 +20,11 @@ export interface Editor {
   dirty?: boolean
   lockedSubject?: boolean
   title?: string
+  targetPosition?: string
 }
 
 const titles: Record<EditableCommand['type'], string> = {
-  saveCategory: '分类', saveProject: '项目', saveTask: '长期任务', saveTodo: '一次性待办',
+  saveCategory: '分类', saveProject: '项目', saveTask: '长期任务', saveTodo: '临时待办',
   saveSchedule: '日程安排', createScheduledEntry: '新增安排', moveSchedule: '移动安排', completeSchedule: '记录完成情况',
   saveWorkLog: '实际学习记录', saveWeekItem: '本周目标', saveWeekCapacity: '本周可用时间', saveCapacityTemplate: '默认配置',
 }
@@ -66,15 +67,16 @@ function DateField({ label, value, onChange, required = false, max = '9999-12-31
   return <label>{label}<input type="date" min="0001-01-01" max={max} required={required} value={value} onChange={e => onChange(e.target.value)} /></label>
 }
 
-function PriorityFields({ priority, dueDate, onChange }: {
+function PriorityFields({ priority, dueDate, onChange, showDueDate = true }: {
   priority: keyof typeof PRIORITY_LABEL; dueDate: string | null;
   onChange: (patch: { priority?: keyof typeof PRIORITY_LABEL; dueDate?: string | null }) => void
+  showDueDate?: boolean
 }) {
-  return <div className="form-pair">
+  return <div className={showDueDate ? 'form-pair' : undefined}>
     <label>重要程度<select aria-label="重要程度" value={priority} onChange={e => onChange({ priority: e.target.value as keyof typeof PRIORITY_LABEL })}>
       {Object.entries(PRIORITY_LABEL).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
     </select></label>
-    <DateField label="截止日期（可选）" value={dueDate ?? ''} onChange={v => onChange({ dueDate: v || null })} />
+    {showDueDate && <DateField label="截止日期（可选）" value={dueDate ?? ''} onChange={v => onChange({ dueDate: v || null })} />}
   </div>
 }
 
@@ -115,9 +117,9 @@ function SubjectField({ data, value, now, onChange, standalone, all, omit, locke
     if (entry) onChange(entrySubject(entry), entry.title)
     else onChange({ taskId: null, todoId: null }, '')
   }}>
-    <option value={standalone ? 'standalone' : ''}>{standalone ? '独立事项' : '请选择待办或长期任务'}</option>
+    <option value={standalone ? 'standalone' : ''}>{standalone ? '独立事项' : '请选择任务'}</option>
     {entries.map(entry => <option key={subjectKey(entrySubject(entry))} value={subjectKey(entrySubject(entry)) ?? ''}>
-      {entry.kind === 'task' ? '长期 · ' : '待办 · '}{entry.title}
+      {ENTRY_LABEL[entry.kind]} · {entry.title}
     </option>)}
   </select></label>
 }
@@ -150,12 +152,17 @@ function EntryFields({ command, data, existing, embedded, onChange }: {
   const v = command.value
   const patch = (value: Partial<typeof v>) => onChange({ ...command, value: { ...v, ...value } })
   return <>
-    <TextField label="待办名称" value={v.title} onChange={title => patch({ title })} />
-    <ParentFields data={data} categoryId={v.categoryId} projectId={v.projectId} onChange={(categoryId, projectId) => patch({ categoryId, projectId })} />
-    <PriorityFields priority={v.priority} dueDate={v.dueDate} onChange={patch} />
-    <MinutesField label="预计分钟数（可选）" value={v.estimatedMinutes} max={10080} onChange={estimatedMinutes => patch({ estimatedMinutes })} required={false} />
+    <TextField label={v.recursWeekly ? '任务名称' : '待办名称'} value={v.title} onChange={title => patch({ title })} />
+    <ParentFields data={data} categoryId={v.categoryId} projectId={v.projectId} required={v.recursWeekly}
+      onChange={(categoryId, projectId) => patch({ categoryId, projectId })} />
+    <PriorityFields priority={v.priority} dueDate={v.dueDate} onChange={patch} showDueDate={!v.recursWeekly} />
+    {v.recursWeekly
+      ? <HoursField label="每周时长（h）" value={v.estimatedMinutes ?? 0} max={10080}
+        onChange={minutes => patch({ estimatedMinutes: minutes || null })} />
+      : <MinutesField label="预计分钟数（可选）" value={v.estimatedMinutes} max={10080} onChange={estimatedMinutes => patch({ estimatedMinutes })} required={false} />}
     <NoteField label={embedded ? '任务备注（可选）' : undefined} value={v.note} onChange={note => patch({ note })} />
-    {existing && <label className="check"><input type="checkbox" checked={v.archived} onChange={e => patch({ archived: e.target.checked })} />归档待办</label>}
+    {existing && <label className="check"><input type="checkbox" checked={v.archived} onChange={e => patch({ archived: e.target.checked })} />
+      {v.recursWeekly ? '归档任务' : '归档待办'}</label>}
   </>
 }
 
@@ -164,7 +171,7 @@ function ScheduleFields({ command, data, now, existing, onChange }: {
 }) {
   const v = command.type === 'saveSchedule' ? command.value : command.value.schedule
   const draft = command.type === 'createScheduledEntry' ? command.value.entry : null
-  const [kind, setKind] = useState<'task' | 'todo' | 'standalone'>(v.taskId ? 'task' : v.todoId ? 'todo' : 'standalone')
+  const [kind, setKind] = useState<PoolEntry['kind'] | 'standalone'>(selectedEntry(data, v)?.kind ?? 'standalone')
   const key = subjectKey(v)
   const entries = sortPool(poolEntries(data).filter(e => e.kind === kind &&
     (subjectKey(entrySubject(e)) === key || isPlannable(e, data))), now)
@@ -176,12 +183,13 @@ function ScheduleFields({ command, data, now, existing, onChange }: {
   }
   function changeKind(next: typeof kind) {
     setKind(next)
-    onChange({ type: 'saveSchedule', value: { ...v, taskId: null, todoId: null, title: '', plannedUnits: null } })
+    onChange({ type: 'saveSchedule', value: { ...v, taskId: null, todoId: null, title: '', plannedUnits: null,
+      plannedRangeText: next === 'recurring' ? '' : v.plannedRangeText } })
   }
   function chooseSubject(value: string) {
     if (value === 'new') {
       const entry: EntryCommand = kind === 'task' ? { type: 'saveTask', value: newTask(category?.id ?? '') }
-        : { type: 'saveTodo', value: newTodo() }
+        : { type: 'saveTodo', value: kind === 'recurring' ? newRecurringTask(category?.id ?? '') : newTodo() }
       const schedule = { ...v, taskId: entry.type === 'saveTask' ? entry.value.id : null,
         todoId: entry.type === 'saveTodo' ? entry.value.id : null, title: '', plannedUnits: null }
       onChange({ type: 'createScheduledEntry', value: { entry, schedule } })
@@ -189,23 +197,25 @@ function ScheduleFields({ command, data, now, existing, onChange }: {
     }
     const entry = entries.find(e => subjectKey(entrySubject(e)) === value)
     const subject = entry ? entrySubject(entry) : { taskId: null, todoId: null }
-    const estimate = entry?.kind === 'todo' ? Math.min(entry.estimatedMinutes ?? 0, 1440) : 0
+    const estimate = entry && entry.kind !== 'task' ? Math.min(entry.estimatedMinutes ?? 0, 1440) : 0
     onChange({ type: 'saveSchedule', value: { ...v, ...subject, title: entry?.title ?? '', plannedUnits: null,
       plannedMinutes: v.plannedMinutes || estimate } })
   }
   const unit = draft?.type === 'saveTask' ? draft.value.unitName : data.tasks.find(t => t.id === v.taskId)?.unitName
-  const choiceLabel = kind === 'task' ? '选择长期任务' : '选择临时待办'
+  const typeLabel = kind === 'standalone' ? '独立任务' : ENTRY_LABEL[kind]
+  const choiceLabel = `选择${typeLabel}`
   return <>
     <label>任务类型<select aria-label="任务类型" value={kind} onChange={e => changeKind(e.target.value as typeof kind)}>
-      <option value="standalone">独立任务</option><option value="task">长期任务</option><option value="todo">临时待办</option>
+      <option value="standalone">独立任务</option>
+      {Object.entries(ENTRY_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
     </select></label>
     {kind === 'standalone' ? <TextField label="安排名称" value={v.title} onChange={title => patch({ title })} /> : <>
       <label>{choiceLabel}<select aria-label={choiceLabel} value={draft ? 'new' : key ?? ''} required onChange={e => chooseSubject(e.target.value)}>
         <option value="">请选择</option>
-        {!existing && (kind === 'todo' || category) && <option value="new">{kind === 'task' ? '＋ 新增长期任务' : '＋ 新增临时待办'}</option>}
+        {!existing && (kind === 'todo' || category) && <option value="new">＋ 新增{typeLabel}</option>}
         {entries.map(e => <option key={e.id} value={subjectKey(entrySubject(e)) ?? ''}>{e.title}</option>)}
       </select></label>
-      {kind === 'task' && !category && !entries.length && <p className="muted">在任务池创建分类后可新增长期任务。</p>}
+      {kind !== 'todo' && !category && !entries.length && <p className="muted">在任务池创建分类后可新增{typeLabel}。</p>}
     </>}
     {draft && <div className="schedule-entry-fields">
       <EntryFields key={draft.value.id} command={draft} data={data} embedded onChange={entry => onChange({
@@ -217,10 +227,10 @@ function ScheduleFields({ command, data, now, existing, onChange }: {
       <PeriodField value={v.period} onChange={period => patch({ period })} />
     </div>
     <HoursField key={key ?? 'standalone'} label="计划时长（h）" value={v.plannedMinutes} max={1440} onChange={plannedMinutes => patch({ plannedMinutes })} />
-    <div className={unit ? 'form-pair' : undefined}>
+    {kind !== 'recurring' && <div className={unit ? 'form-pair' : undefined}>
       {unit && <label>目标新增（{unit}，可选）<input inputMode="decimal" value={v.plannedUnits ?? ''} onChange={e => patch({ plannedUnits: e.target.value || null })} /></label>}
       <label>目标位置（可选）<input value={v.plannedRangeText} maxLength={500} placeholder="例如第 3 章" onChange={e => patch({ plannedRangeText: e.target.value })} /></label>
-    </div>
+    </div>}
     <NoteField label="安排备注（可选）" value={v.note} onChange={note => patch({ note })} />
   </>
 }
@@ -259,8 +269,9 @@ function CapacityFields({ command, template, onChange }: {
   </>
 }
 
-function EditorFields({ editor, data, now, onChange }: {
+function EditorFields({ editor, data, now, onChange, onTargetChange }: {
   editor: Editor; data: Dataset; now: string; onChange: (command: EditableCommand) => void
+  onTargetChange: (position: string) => void
 }) {
   const command = editor.command
   if (command.type === 'saveCategory') {
@@ -292,11 +303,14 @@ function EditorFields({ editor, data, now, onChange }: {
     const entry = selectedEntry(data, v)
     const items = data.weekItems.filter(item => item.weekStart === v.weekStart)
     const visibleSubjects = [
-      ...items.filter(item => item.id !== v.id && (item.status === 'active' || item.status === 'carried')).map(subjectKey),
+      ...weekGoalItems(data, v.weekStart, now).map(({ item }) => item)
+        .filter(item => item.id !== v.id && (item.status === 'active' || item.status === 'carried')).map(subjectKey),
       ...weekCandidates(data, v.weekStart, now).map(candidate => subjectKey(entrySubject(candidate))),
     ]
-    const target = quantitySchema.safeParse(v.targetUnits)
     const starting = entry?.kind === 'task' ? progressBeforeWeek(entry, data.workLogs, v.weekStart) : null
+    const target = editor.targetPosition ?? (starting !== null && v.targetUnits !== null
+      ? ticksQuantity(starting + quantityTicks(v.targetUnits)) : '')
+    const delta = editor.targetPosition !== undefined && starting !== null ? weekTargetDelta(target, starting).delta : v.targetUnits
     return <>
       <p className="muted">{dateLabel(v.weekStart)}起</p>
       <SubjectField now={now} data={data} value={v} omit={new Set(visibleSubjects)} locked={editor.lockedSubject || editor.existing}
@@ -304,14 +318,14 @@ function EditorFields({ editor, data, now, onChange }: {
           const next = selectedEntry(data, subject)
           const previous = items.find(item => subjectKey(item) === subjectKey(subject))
           patch({ ...subject, id: previous?.id ?? crypto.randomUUID(),
-            minutes: previous?.minutes ?? (next?.kind === 'todo' ? next.estimatedMinutes ?? 0 : 0),
+            minutes: previous?.minutes ?? (next && next.kind !== 'task' ? next.estimatedMinutes ?? 0 : 0),
             targetUnits: previous?.targetUnits ?? null })
         }} />
       <HoursField key={v.id} label="本周计划时长（h）" value={v.minutes} max={10080} onChange={minutes => patch({ minutes })} />
-      {entry?.kind === 'task' && <>
-        <label>本周目标新增（{entry.unitName}，可选）<input inputMode="decimal" value={v.targetUnits ?? ''} onChange={e => patch({ targetUnits: e.target.value || null })} /></label>
-        {starting !== null && <p className="muted">周初 {ticksQuantity(starting)} {entry.unitName}
-          {target.success && ` → 目标 ${ticksQuantity(starting + quantityTicks(target.data))} ${entry.unitName}`}</p>}
+      {entry?.kind === 'task' && starting !== null && <>
+        <label>{entry.unitName === '页' ? '预期目标页码（可选）' : `预期目标（${entry.unitName}，可选）`}
+          <input inputMode="decimal" value={target} onChange={e => onTargetChange(e.target.value)} /></label>
+        <p className="muted">周初 {ticksQuantity(starting)} {entry.unitName}{delta && ` · 本周预计新增 ${delta} ${entry.unitName}`}</p>
       </>}
     </>
   }
@@ -409,7 +423,13 @@ export function PlannerEditor({ editor, data, now, disabled, error, status, retr
     </div>
     <form onSubmit={e => { e.preventDefault(); onSubmit() }}>
       <fieldset disabled={disabled}>
-        <EditorFields editor={editor} data={data} now={now} onChange={command => onChange({ ...editor, command, dirty: true })} />
+        <EditorFields editor={editor} data={data} now={now}
+          onTargetChange={targetPosition => onChange({ ...editor, targetPosition, dirty: true })}
+          onChange={command => {
+            const sameGoal = command.type === 'saveWeekItem' && editor.command.type === 'saveWeekItem'
+              && subjectKey(command.value) === subjectKey(editor.command.value)
+            onChange({ ...editor, command, dirty: true, targetPosition: sameGoal ? editor.targetPosition : undefined })
+          }} />
       </fieldset>
       {error && <p className="notice notice-warning" role="alert">{error}</p>}
       {status && <p className="save-status" role="status">{status}</p>}

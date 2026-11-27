@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { datasetSchema, quantityTicks, taskInputSchema } from '../src/domain/model'
 import { createBackup, parseBackup } from '../src/data/backup'
-import { audit, category, fixtureData, goal, schedule, task, todo } from './fixtures'
+import { audit, category, fixtureData, goal, savedGoal, schedule, task, todo } from './fixtures'
 
 describe('精确进度与备份边界', () => {
   it('小数精确比较，位置文字不会参与计算', () => {
@@ -50,12 +50,25 @@ describe('精确进度与备份边界', () => {
       },
     }
     const migrated = parseBackup(JSON.stringify(legacy))
-    expect(migrated.schemaVersion).toBe(6)
+    expect(migrated.schemaVersion).toBe(7)
     expect(migrated.data.tasks[0].activated).toBe(false)
     expect(migrated.data.weeks[0].capacity?.[0]).toEqual([120, 0, 0])
     expect(migrated.data.settings.capacityTemplate?.[1]).toEqual([30, 0, 0])
     expect(migrated.data.schedules[0]).toMatchObject({ id: schedule.id, period: 'morning', position: 0, outcome: 'skipped' })
     legacy.data.categories = []
     expect(() => parseBackup(JSON.stringify(legacy))).toThrow('引用')
+  })
+  it('v6 的已有激活和周目标升级时不被改为周期任务', () => {
+    const data = fixtureData()
+    const { recursWeekly, recurringNextWeek, ...oldTodo } = data.todos[0]
+    const { recurringCompletedOn, ...oldGoal } = savedGoal
+    void recursWeekly; void recurringNextWeek; void recurringCompletedOn
+    const backup = parseBackup(JSON.stringify({
+      format: 'study-planner', schemaVersion: 6, appVersion: '0.5.1', exportedAt: audit.createdAt,
+      data: { ...data, todos: [{ ...oldTodo, activated: true }], weekItems: [oldGoal],
+        weeks: [{ weekStart: goal.weekStart, capacity: null, committedAt: null }] },
+    }))
+    expect(backup.data.todos[0]).toMatchObject({ activated: true, recursWeekly: false, recurringNextWeek: null })
+    expect(backup.data.weekItems[0]).toMatchObject({ targetUnits: '30', recurringCompletedOn: null })
   })
 })

@@ -30,6 +30,7 @@ export function EntryTag({ entry, data, now }: { entry?: PoolEntry; data: Datase
   const project = data.projects.find(p => p.id === entry.projectId)
   return <div className="tags">
     {category && <span className="tag"><span className="color-dot" style={{ background: category.color }} />{category.name}{project && ` / ${project.title}`}</span>}
+    {entry.kind === 'recurring' && <span className="tag">周期任务</span>}
     {entry.priority !== 'normal' && <span className="tag tag-accent">{PRIORITY_LABEL[entry.priority]}</span>}
     {entry.dueDate && <span className={`tag ${entry.dueDate < now && (entry.kind === 'task' || !entry.completedOn) ? 'tag-warning' : ''}`}>{monthDay(entry.dueDate)}截止</span>}
   </div>
@@ -57,15 +58,15 @@ export function ProgressBar({ label, detail, ratio, tone }: {
   </div>
 }
 
-export function GoalProgress({ row, through }: { row: GoalRow; through: string }) {
+export function GoalProgress({ row }: { row: GoalRow }) {
   if (row.progress) {
     const { current, target, unit, ratio } = row.progress
     const position = unit === '页' ? `p${current} / p${target}` : `${current} / ${target} ${unit}`
     return <ProgressBar label="周进度" detail={`${position} · ${Math.round(ratio * 100)}%`} ratio={ratio} />
   }
-  if (row.entry?.kind === 'todo') {
-    const done = row.entry.completedOn && row.entry.completedOn <= through
-    return <p className={done ? 'goal-done' : 'muted'}>{done ? '已完成' : '尚未完成'}</p>
+  if (row.entry?.kind === 'todo' || row.entry?.kind === 'recurring') {
+    const label = row.entry.kind === 'recurring' ? '未完成' : '尚未完成'
+    return <p className={row.current.reached ? 'goal-done' : 'muted'}>{row.current.reached ? '已完成' : label}</p>
   }
   return <p className="muted">未设进度目标</p>
 }
