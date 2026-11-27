@@ -12,6 +12,7 @@ import { PlannerEditor, type Editor } from './planner/PlannerEditor'
 import { PoolPage } from './planner/PoolPage'
 import { ReviewPage } from './planner/ReviewPage'
 import { WeekPage } from './planner/WeekPage'
+import { ActionMenu, type PageToolbar } from './planner/controls'
 import { BackupPanel } from './settings/BackupPanel'
 
 function useBusinessToday() {
@@ -110,7 +111,8 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
     }
   }
 
-  const disabled = busy || !!pending || loading || !snapshot || snapshot.revision < requiredRevision
+  const snapshotBehind = !!snapshot && snapshot.revision < requiredRevision
+  const disabled = busy || !!pending || loading || !snapshot || snapshotBehind
   function start(command: Command, base: number) {
     if (disabled) return
     try {
@@ -204,33 +206,40 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
         start({ type: schedule ? 'removeSchedule' : 'removeWorkLog', value: { id: editor.command.value.id } }, editor.base)
       }
     } : undefined
-  return <>
-    <header className="page-header">
-      <div><h1>{page.label}</h1><p>{page.description}</p></div>
-      <details className="account-menu">
-        <summary>账号</summary>
-        <div className="account-panel"><strong>{email}</strong>
+  const liveStatus = loading ? '正在读取云端…' : status
+  const showNotices = snapshotBehind || (!editor && Boolean(error || retry))
+  const toolbar: PageToolbar = controls => <>
+    <header className="workspace-toolbar">
+      <h1>{page.label}</h1>
+      {controls && <div className="toolbar-actions">{controls}</div>}
+      <div className="toolbar-meta">
+        <div className="workspace-status" title={liveStatus}><span role="status">{liveStatus}</span></div>
+        <ActionMenu className="account-menu" label="账号" trigger="账号">
+          <strong>{email}</strong>
           <p className="muted">最近获取 {fetchedAt ? new Date(fetchedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未成功'}</p>
           <button disabled={busy || loading} onClick={() => { void refresh() }}>获取最新数据</button>
           <button disabled={busy} className="button-text" onClick={() => {
             if (pending && !window.confirm('退出会清除当前请求信息。仍要退出？')) return
             void logout().catch(handleError)
           }}>退出登录</button>
-        </div>
-      </details>
+        </ActionMenu>
+      </div>
     </header>
-    <div className="workspace-status" aria-label="云端状态">
-      <span role="status">{loading ? '正在读取云端…' : status}</span>
+    {showNotices && <div className="workspace-notices">
       {!editor && error && <p className="notice notice-warning" role="alert">{error}</p>}
-      {snapshot && snapshot.revision < requiredRevision && <p className="notice" role="alert">保存已确认，请获取最新数据后继续。</p>}
+      {snapshotBehind && <p className="notice" role="alert">保存已确认，请获取最新数据后继续。</p>}
       {!editor && retry}
-    </div>
+    </div>}
+  </>
+  return <>
+    {(!snapshot || page.id === 'settings') && toolbar()}
     {snapshot ? <>
-      {page.id === 'today' && <DayPage data={snapshot} date={now} now={now} actions={actions} />}
-      {page.id === 'tasks' && <PoolPage data={snapshot} now={now} actions={actions} />}
-      {page.id === 'planning' && <WeekPage data={snapshot} date={date} now={now} setDate={setDate} actions={actions} />}
-      {page.id === 'calendar' && <CalendarPage data={snapshot} date={date} now={now} setDate={setDate} actions={actions} initialMode={calendarStart} />}
-      {page.id === 'review' && <ReviewPage data={snapshot} date={date} now={now} setDate={setDate} />}
+      {page.id === 'today' && <DayPage data={snapshot} date={now} now={now} actions={actions} toolbar={toolbar} />}
+      {page.id === 'tasks' && <PoolPage data={snapshot} now={now} actions={actions} toolbar={toolbar} />}
+      {page.id === 'planning' && <WeekPage data={snapshot} date={date} now={now} setDate={setDate} actions={actions} toolbar={toolbar} />}
+      {page.id === 'calendar' && <CalendarPage data={snapshot} date={date} now={now} setDate={setDate} actions={actions}
+        initialMode={calendarStart} toolbar={toolbar} />}
+      {page.id === 'review' && <ReviewPage data={snapshot} date={date} now={now} setDate={setDate} toolbar={toolbar} />}
       {page.id === 'settings' && <BackupPanel repository={repository} snapshot={snapshot} disabled={actions.disabled} refresh={refresh}
         restore={(backup, base) => start({ type: 'restore', value: backup.data }, base)} onError={handleError} />}
       {editor && <PlannerEditor editor={editor} data={snapshot} now={now} disabled={disabled} error={error} status={status} retry={retry}
