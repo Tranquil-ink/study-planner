@@ -34,7 +34,7 @@ describe('实际记录的精确进度、日期与备份', () => {
     expect(datasetSchema.safeParse(data).success).toBe(true)
     for (const workLogs of [[row({ progressDelta: '32.000001' })], [row(), row()], [row({ taskId: randomUUID() })], [row({ scheduleBlockId: randomUUID() })], [row({ scheduleBlockId: schedule.id, taskId: null, progressDelta: null })]]) expect(datasetSchema.safeParse({ ...data, workLogs }).success).toBe(false)
     const backup = createBackup({ ...data, revision: 1 })
-    expect(backup.schemaVersion).toBe(6)
+    expect(backup.schemaVersion).toBe(7)
     expect(parseBackup(JSON.stringify(backup)).data).toEqual(data)
     const withoutLogs = { ...data, workLogs: undefined }
     expect(() => parseBackup(JSON.stringify({ ...backup, data: withoutLogs }))).toThrow()

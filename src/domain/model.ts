@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { isBusinessDate, weekdayIndex } from './calendar'
+import { isBusinessDate, weekStart, weekdayIndex } from './calendar'
 
 // Keep quantities exact across the browser, PostgreSQL and JSON backups.
 export const quantitySchema = z.string().regex(/^(0|[1-9]\d{0,8})(\.\d{1,6})?$/, '进度须为非负数，最多 9 位整数、6 位小数')
@@ -48,12 +48,22 @@ const todoParent = (v: { categoryId: string | null; projectId: string | null }) 
 export const categoryInputSchema = z.strictObject(categoryFields)
 export const projectInputSchema = z.strictObject(projectFields)
 export const taskInputSchema = z.strictObject(taskFields).refine(withinTotal, progressRule)
-export const todoInputSchema = z.strictObject(todoFields).refine(todoParent, '项目需要所属分类')
+export const todoInputSchema = z.strictObject({ ...todoFields, recursWeekly: z.boolean().optional() })
+  .refine(todoParent, '项目需要所属分类')
+  .refine(v => !v.recursWeekly || (!!v.categoryId && v.estimatedMinutes !== null && v.dueDate === null),
+    '周期任务需要分类和每周时长')
 export const categorySchema = categoryInputSchema.extend(audit).refine(auditOrder)
 export const projectSchema = projectInputSchema.extend(audit).refine(auditOrder)
 const todoAudit = { ...audit, completedOn: day.nullable() }
 const taskSchema = z.strictObject({ ...taskFields, ...audit, ...activated }).refine(withinTotal, progressRule).refine(auditOrder)
-const todoSchema = z.strictObject({ ...todoFields, ...todoAudit, ...activated }).refine(todoParent).refine(auditOrder)
+const todoSnapshotFields = { ...todoFields, ...todoAudit, ...activated }
+const todoSchema = z.discriminatedUnion('recursWeekly', [
+  z.strictObject({ ...todoSnapshotFields, recursWeekly: z.literal(false), recurringNextWeek: z.null() }),
+  z.strictObject({
+    ...todoSnapshotFields, recursWeekly: z.literal(true), recurringNextWeek: monday.nullable(),
+    categoryId: uuid, dueDate: z.null(), completedOn: z.null(), estimatedMinutes: weeklyDuration,
+  }).refine(v => v.activated === (v.recurringNextWeek !== null)),
+]).refine(todoParent).refine(auditOrder)
 
 const capacityMinutes = z.number().int().min(0).max(1440)
 const dayCapacity = z.tuple([capacityMinutes, capacityMinutes, capacityMinutes])
@@ -69,8 +79,9 @@ const validWeekSubject = (row: Subject & { targetUnits: string | null }) =>
   (!!row.taskId !== !!row.todoId) && (!row.targetUnits || !!row.taskId)
 const baseline = z.strictObject({ minutes: weeklyDuration, targetUnits: positiveQuantity.nullable() })
 const weekItemStatus = z.enum(['active', 'returned', 'cancelled', 'carried'])
-export const weekItemInputSchema = z.strictObject(weekItemFields).refine(validWeekSubject, '请选择一项待办或长期任务')
-const weekItemSchema = z.strictObject({ ...weekItemFields, ...audit, status: weekItemStatus, baseline: baseline.nullable() })
+export const weekItemInputSchema = z.strictObject(weekItemFields).refine(validWeekSubject, '请选择一项任务')
+const weekItemSnapshotFields = { ...weekItemFields, ...audit, status: weekItemStatus, baseline: baseline.nullable() }
+const weekItemSchema = z.strictObject({ ...weekItemSnapshotFields, recurringCompletedOn: day.nullable() })
   .refine(validWeekSubject).refine(v => !!v.taskId || !v.baseline?.targetUnits).refine(auditOrder)
 
 const scheduleFields = {
@@ -104,20 +115,29 @@ export function subjectKey(row: Subject): string | null {
   return row.taskId ? `task:${row.taskId}` : row.todoId ? `todo:${row.todoId}` : null
 }
 
-const datasetFields = {
-  categories: z.array(categorySchema), projects: z.array(projectSchema), tasks: z.array(taskSchema), todos: z.array(todoSchema),
-  weeks: z.array(weekSchema), weekItems: z.array(weekItemSchema), schedules: z.array(scheduleSchema),
+const commonDatasetFields = {
+  categories: z.array(categorySchema), projects: z.array(projectSchema), tasks: z.array(taskSchema),
+  weeks: z.array(weekSchema), schedules: z.array(scheduleSchema),
   workLogs: z.array(workLogSchema), settings: settingsSchema,
 }
+const legacyWeekItems = z.array(z.strictObject(weekItemSnapshotFields))
+export const v6DatasetSchema = z.strictObject({
+  ...commonDatasetFields,
+  todos: z.array(z.strictObject(todoSnapshotFields)),
+  weekItems: legacyWeekItems,
+})
 export const v5DatasetSchema = z.strictObject({
-  ...datasetFields,
+  ...commonDatasetFields,
+  weekItems: legacyWeekItems,
   tasks: z.array(z.strictObject({ ...taskFields, ...audit })),
   todos: z.array(z.strictObject({ ...todoFields, ...todoAudit })),
   weeks: z.array(z.strictObject({ ...weekFields, capacity: sevenDays(capacityMinutes).nullable() })),
   schedules: z.array(z.strictObject({ ...scheduleFields, ...audit, resolved: z.boolean() })),
   settings: z.strictObject({ ...settingsFields, capacityTemplate: sevenDays(capacityMinutes).nullable() }),
 })
-export const datasetSchema = z.strictObject(datasetFields).superRefine((data, ctx) => {
+export const datasetSchema = z.strictObject({
+  ...commonDatasetFields, todos: z.array(todoSchema), weekItems: z.array(weekItemSchema),
+}).superRefine((data, ctx) => {
   const issue = (message: string) => ctx.addIssue({ code: 'custom', message })
   for (const rows of [data.categories, data.projects, data.tasks, data.todos, data.weekItems, data.schedules, data.workLogs]) {
     if (new Set(rows.map(row => row.id)).size !== rows.length) issue('存在重复 ID')
@@ -129,8 +149,8 @@ export const datasetSchema = z.strictObject(datasetFields).superRefine((data, ct
   const validParent = (row: { categoryId: string | null; projectId: string | null }) =>
     (!row.categoryId || categoryIds.has(row.categoryId)) && (!row.projectId || projects.get(row.projectId)?.categoryId === row.categoryId)
   if (data.projects.some(p => !categoryIds.has(p.categoryId)) || [...data.tasks, ...data.todos].some(row => !validParent(row))) issue('分类或项目引用不正确')
-  const taskIds = new Set(data.tasks.map(t => t.id)), todoIds = new Set(data.todos.map(t => t.id))
-  const exists = (row: Subject) => (!row.taskId || taskIds.has(row.taskId)) && (!row.todoId || todoIds.has(row.todoId))
+  const taskIds = new Set(data.tasks.map(t => t.id)), todos = new Map(data.todos.map(t => [t.id, t]))
+  const exists = (row: Subject) => (!row.taskId || taskIds.has(row.taskId)) && (!row.todoId || todos.has(row.todoId))
   if ([...data.weekItems, ...data.schedules, ...data.workLogs].some(row => !exists(row))) issue('任务或待办引用不存在')
   const weekSubjects = new Set<string>()
   for (const row of data.weekItems) {
@@ -138,6 +158,8 @@ export const datasetSchema = z.strictObject(datasetFields).superRefine((data, ct
     if (weekSubjects.has(key)) issue('同一任务在同一周只有一条目标')
     weekSubjects.add(key)
     if (!weeks.has(row.weekStart) || (row.baseline && !weeks.get(row.weekStart)?.committedAt)) issue('周目标与周计划或周初基线不一致')
+    if (row.recurringCompletedOn && (!row.todoId || !todos.get(row.todoId)?.recursWeekly ||
+      weekStart(row.recurringCompletedOn) !== row.weekStart)) issue('周期任务的完成日期与周目标不一致')
   }
   if (new Set(data.workLogs.map(l => l.createdOrder)).size !== data.workLogs.length) issue('实际记录创建顺序重复')
   const positions = new Set(data.schedules.map(s => `${s.date}/${s.period}/${s.position}`))
@@ -181,7 +203,7 @@ const commandSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('saveProject'), value: projectInputSchema }),
   z.strictObject({ type: z.literal('saveTask'), value: taskInputSchema }),
   z.strictObject({ type: z.literal('saveTodo'), value: todoInputSchema }),
-  z.strictObject({ type: z.literal('setSubjectActivated'), value: idInput.extend({ kind: z.enum(['task', 'todo']), activated: z.boolean() }) }),
+  z.strictObject({ type: z.literal('setSubjectActivated'), value: idInput.extend({ kind: z.enum(['task', 'todo', 'recurring']), activated: z.boolean() }) }),
   z.strictObject({ type: z.literal('saveWeekItem'), value: weekItemInputSchema }),
   z.strictObject({ type: z.literal('setWeekItemStatus'), value: idInput.extend({ status: z.enum(['active', 'returned', 'cancelled']) }) }),
   z.strictObject({ type: z.literal('commitWeek'), value: weekInput }),

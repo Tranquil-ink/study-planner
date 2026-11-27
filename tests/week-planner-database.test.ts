@@ -6,7 +6,7 @@ import { businessData, snapshotSchema, type Capacity, type ScheduleInput, type W
 import { shiftDate, today, weekStart } from '../src/domain/calendar'
 import { weekSummary } from '../src/domain/planning'
 import { createBackup, parseBackup } from '../src/data/backup'
-import { category, goal, legacyTask, ownerA, ownerB, schedule, task, todo } from './fixtures'
+import { category, goal, legacyTask, ownerA, ownerB, recurring, schedule, task, todo } from './fixtures'
 
 let db: PGlite
 const now = today(), week = weekStart(now), nextWeek = shiftDate(week, 7)!
@@ -67,13 +67,19 @@ beforeAll(async () => {
   await db.exec('reset role')
   await migration('202611260001_schedule_board.sql')
   await actor()
+  await write('saveTodo', todo, 10)
+  await write('setSubjectActivated', { id: todo.id, kind: 'todo', activated: true }, 11)
+  await db.exec('reset role')
+  await migration('202611270001_weekly_recurring_tasks.sql')
+  await actor()
 }, 30000)
 afterAll(async () => { await db?.close() })
 
 describe('日程看板 PostgreSQL 事务', () => {
   it('升级已有阶段 5 项目，旧安排、容量、实际和回执完整保留', async () => {
     const state = await snapshot()
-    expect(state.revision).toBe(10)
+    expect(state.revision).toBe(13)
+    expect(state.todos[0]).toMatchObject({ id: todo.id, activated: true, recursWeekly: false, recurringNextWeek: null })
     expect(state.schedules[0]).toMatchObject({ id: oldSchedule.id, plannedMinutes: 90, period: 'morning', position: 0, outcome: 'completed' })
     expect(state.schedules[1]).toMatchObject({ id: oldSkipped.id, plannedMinutes: 45, period: 'morning', position: 1, outcome: 'skipped' })
     expect(state.settings.capacityTemplate?.[1]).toEqual([30, 0, 0])
@@ -169,7 +175,57 @@ describe('日程看板 PostgreSQL 事务', () => {
     await mutate('removeSchedule', { id: currentSchedule.id })
     expect((await snapshot()).workLogs.find(l => l.id === actual.id)).toMatchObject({ scheduleBlockId: null, progressDelta: '6' })
   })
-  it('v6 恢复保留顺序、激活和完成状态，失败回滚并隔离其他账号', async () => {
+  it('周期任务激活即纳入周目标，跳过、完成和改期保留独立周次', async () => {
+    await expect(mutate('saveTodo', { ...recurring, estimatedMinutes: null })).rejects.toThrow('planner_todo_recurrence')
+    await mutate('saveTodo', recurring)
+    const activation = { id: recurring.id, kind: 'recurring', activated: true }
+    const revision = (await snapshot()).revision, requestId = randomUUID()
+    const receipt = await write('setSubjectActivated', activation, revision, requestId)
+    expect(await write('setSubjectActivated', activation, revision, requestId)).toEqual(receipt)
+    let state = await snapshot()
+    expect(state.revision).toBe(receipt.revision)
+    expect(state.weekItems.filter(i => i.todoId === recurring.id)).toMatchObject([
+      { weekStart: week, minutes: 45, recurringCompletedOn: null },
+    ])
+    await mutate('saveTodo', { ...recurring, estimatedMinutes: 90 })
+    await mutate('commitWeek', { weekStart: nextWeek })
+    const recurringSchedule = { ...todoSchedule, id: randomUUID(), todoId: recurring.id, title: recurring.title, plannedMinutes: 45 }
+    await mutate('saveSchedule', recurringSchedule)
+    await mutate('setScheduleOutcome', { id: recurringSchedule.id, outcome: 'skipped' })
+    expect((await snapshot()).weekItems.find(i => i.todoId === recurring.id && i.weekStart === week)?.recurringCompletedOn).toBeNull()
+    await mutate('setScheduleOutcome', { id: recurringSchedule.id, outcome: 'pending' })
+    const complete = { id: recurringSchedule.id, logId: randomUUID(), date: now, actualMinutes: 50, reachedUnits: null, progressLabel: '', note: '' }
+    await mutate('completeSchedule', complete)
+    await mutate('moveSchedule', { id: recurringSchedule.id, date: nextWeek, period: 'afternoon', beforeId: null })
+    state = await snapshot()
+    expect(state.todos.find(r => r.id === recurring.id)).toMatchObject({ activated: true, recursWeekly: true, completedOn: null })
+    expect(state.weekItems.filter(i => i.todoId === recurring.id)).toMatchObject([
+      { weekStart: week, minutes: 45, recurringCompletedOn: now },
+      { weekStart: nextWeek, minutes: 90, recurringCompletedOn: null, baseline: { minutes: 90, targetUnits: null } },
+    ])
+    expect(state.workLogs.find(row => row.id === complete.logId)).toMatchObject({ actualMinutes: 50, progressDelta: null, date: now })
+    expect(weekSummary(state, nextWeek, now).items.find(row => row.item.todoId === recurring.id)?.current.reached).toBe(false)
+  })
+  it('下次读取补齐激活期间未打开的周，重复读取与取消激活保留历史', async () => {
+    const backfillFrom = shiftDate(week, -14)!
+    const before = await snapshot()
+    const imported = businessData(before)
+    const definition = imported.todos.find(t => t.id === recurring.id)
+    if (!definition?.recursWeekly) throw new Error('需要周期任务')
+    definition.recurringNextWeek = backfillFrom
+    await mutate('restore', imported)
+    const filled = await snapshot()
+    expect(filled.weekItems.filter(i => i.todoId === recurring.id).map(i => i.weekStart))
+      .toEqual([backfillFrom, shiftDate(week, -7), week, nextWeek])
+    expect(filled.weekItems.find(i => i.todoId === recurring.id && i.weekStart === week)?.recurringCompletedOn).toBe(now)
+    expect(await snapshot()).toEqual(filled)
+    await mutate('setSubjectActivated', { id: recurring.id, kind: 'recurring', activated: false })
+    const stopped = await snapshot()
+    expect(stopped.todos.find(t => t.id === recurring.id)).toMatchObject({ activated: false, recurringNextWeek: null })
+    expect(stopped.weekItems).toEqual(filled.weekItems)
+    expect(weekSummary(stopped, shiftDate(nextWeek, 7)!, now).items).toEqual([])
+  })
+  it('v7 恢复保留顺序、激活和完成状态，失败回滚并隔离其他账号', async () => {
     const before = await snapshot()
     const expected = parseBackup(JSON.stringify(createBackup(before))).data
     const requestId = randomUUID()
@@ -186,12 +242,15 @@ describe('日程看板 PostgreSQL 事务', () => {
     expect(state.settings).toEqual(expected.settings)
     expect(state.weeks).toEqual(expected.weeks)
     expect(state.tasks.map(t => t.activated)).toEqual(expected.tasks.map(t => t.activated))
-    expect(state.weekItems.map(i => i.baseline)).toEqual(expected.weekItems.map(i => i.baseline))
+    const weeklyResults = (items: typeof state.weekItems) => Object.fromEntries(items.map(item =>
+      [item.id, { baseline: item.baseline, completedOn: item.recurringCompletedOn }]))
+    expect(weeklyResults(state.weekItems)).toEqual(weeklyResults(expected.weekItems))
     expect(state.schedules.map(s => [s.id, s.position, s.period, s.outcome])).toEqual(expected.schedules.map(s => [s.id, s.position, s.period, s.outcome]))
     expect(state.workLogs.map(l => [l.id, l.createdOrder, l.progressDelta])).toEqual(expected.workLogs.map(l => [l.id, l.createdOrder, l.progressDelta]))
     await actor(ownerB)
     await expect(mutate('saveSchedule', { ...currentSchedule, id: randomUUID() })).rejects.toThrow(/foreign key/)
     await expect(mutate('setSubjectActivated', { id: task.id, kind: 'task', activated: false })).rejects.toThrow('SUBJECT_INACTIVE')
+    await expect(mutate('setSubjectActivated', { id: recurring.id, kind: 'recurring', activated: true })).rejects.toThrow('SUBJECT_INACTIVE')
     expect((await snapshot()).weekItems).toEqual([])
   })
 })

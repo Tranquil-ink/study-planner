@@ -5,8 +5,8 @@ import { capacityFor, dueWithinTwoWeeks, emptyCapacity, entrySubject, isPlannabl
 import type { PlannerActions } from './actions'
 import { DateToolbar, Empty, EntryTag, GoalProgress, Metric } from './controls'
 
-function GoalCard({ row, data, now, through, actions }: {
-  row: GoalRow; data: Dataset; now: string; through: string; actions: PlannerActions
+function GoalCard({ row, data, now, actions }: {
+  row: GoalRow; data: Dataset; now: string; actions: PlannerActions
 }) {
   const { entry, item, budget } = row
   const active = item.status === 'active'
@@ -19,12 +19,12 @@ function GoalCard({ row, data, now, through, actions }: {
       <div><dt>本周计划</dt><dd>{hoursLabel(item.minutes)}</dd></div>
       <div><dt>{budget >= 0 ? '预算剩余' : '超出预算'}</dt><dd className={budget < 0 ? 'warning-text' : ''}>{hoursLabel(Math.abs(budget))}</dd></div>
     </dl>
-    <GoalProgress row={row} through={through} />
+    <GoalProgress row={row} />
     {active && entry && <div className="actions">
       <button disabled={actions.disabled} onClick={() => actions.plan(item.weekStart, entry)}>编辑目标</button>
-      <button className="button-text" disabled={actions.disabled} onClick={() => actions.run({
+      {!row.projected && <button className="button-text" disabled={actions.disabled} onClick={() => actions.run({
         type: 'setWeekItemStatus', value: { id: item.id, status: 'cancelled' },
-      }, '取消本周目标？已有安排和实际记录会保留。')}>取消目标</button>
+      }, '取消本周目标？已有安排和实际记录会保留。')}>取消目标</button>}
     </div>}
   </article>
 }
@@ -62,7 +62,8 @@ export function WeekPage({ data, date, now, setDate, actions }: {
       <div className="metrics metrics-three">
         <Metric label="每周可用" minutes={summary.capacity} />
         <Metric label="目标计划" minutes={summary.plannedMinutes} tone={overload ? 'warning' : undefined} />
-        <Metric label="已安排" minutes={summary.scheduledMinutes} />
+        <Metric label="剩余可安排时间" minutes={summary.remainingCapacity}
+          tone={summary.capacity !== null && summary.scheduledMinutes > summary.capacity ? 'warning' : undefined} />
       </div>
       {overload > 0 && <p className="notice notice-warning" role="status">目标计划超出本周容量 {hoursLabel(overload)}。</p>}
     </section>
@@ -77,7 +78,7 @@ export function WeekPage({ data, date, now, setDate, actions }: {
       </div>
       {!targets.length && !candidates.length && <Empty>在任务池激活任务，或在这里选择本周任务。</Empty>}
       <div className="goal-list">
-        {targets.map(row => <GoalCard key={row.item.id} row={row} data={data} now={now} through={summary.through} actions={actions} />)}
+        {targets.map(row => <GoalCard key={subjectKey(row.item)} row={row} data={data} now={now} actions={actions} />)}
         {candidates.map(entry => <article className="goal-card goal-list-card" key={subjectKey(entrySubject(entry))}>
           <div className="card-title">
             <div><h3>{entry.title}</h3><EntryTag entry={entry} data={data} now={now} /></div>
@@ -90,7 +91,7 @@ export function WeekPage({ data, date, now, setDate, actions }: {
       {history.length > 0 && <details className="history-details">
         <summary>历史调整（{history.length}）</summary>
         <div className="goal-list">{history.map(row =>
-          <GoalCard key={row.item.id} row={row} data={data} now={now} through={summary.through} actions={actions} />)}</div>
+          <GoalCard key={row.item.id} row={row} data={data} now={now} actions={actions} />)}</div>
       </details>}
     </section>
   </div>

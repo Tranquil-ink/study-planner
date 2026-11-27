@@ -111,7 +111,7 @@ main { min-width: 0; padding: 32px clamp(20px, 3.7vw, 56px) 58px; }
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
 .metrics-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .metric { display: grid; gap: 5px; min-width: 0; padding: 13px 14px; border: 1px solid #e8eee7; border-radius: 11px; background: #f6f8f5; }
-.metric span { font-size: .83rem; color: var(--muted); }
+.metric span { font-size: .83rem; color: var(--muted); text-wrap: balance; }
 .metric strong { font-size: clamp(.96rem, 1.4vw, 1.33rem); line-height: 1.3; font-weight: 730; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .metric-accent { background: var(--accent-soft); border-color: #d6e9df; color: #13574d; }
 .metric-warning { background: var(--warning-soft); border-color: #f2e0c3; color: var(--warning); }
@@ -180,6 +180,7 @@ progress::-moz-progress-bar { background: #278577; border-radius: 8px; }
 .add-plus { font-size: 1.25rem; font-weight: 400; line-height: 1; }
 .pool-additions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 154px), 1fr)); gap: 8px; }
 .pool-card-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.pool-card-footer > button { margin-inline-start: auto; }
 .activation-button { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; font-size: .81rem; padding-inline: 8px; }
 .activation-button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: #a8cbbd; }
 .activation-dot { display: block; width: 10px; height: 10px; border: 1.5px solid currentColor; border-radius: 50%; }

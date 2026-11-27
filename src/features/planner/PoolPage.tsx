@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { displayQuantity, quantityTicks, subjectKey, type Category, type Dataset, type Project } from '../../domain/model'
 import { hoursLabel } from '../../domain/calendar'
-import { entrySubject, isOpen, isPlannable, poolEntries, sortPool, type PoolEntry } from '../../domain/planning'
+import { ENTRY_LABEL, entrySubject, isOpen, isPlannable, poolEntries, sortPool, type PoolEntry } from '../../domain/planning'
 import { taskProgress } from '../../domain/work-logs'
 import { AddButton, Empty, EntryTag, ProgressBar } from './controls'
-import { newTask, newTodo, type PlannerActions } from './actions'
+import { newRecurringTask, newTask, newTodo, type PlannerActions } from './actions'
 
 function PoolCard({ entry, data, now, actions }: { entry: PoolEntry; data: Dataset; now: string; actions: PlannerActions }) {
   const progress = entry.kind === 'task' ? taskProgress(entry, data.workLogs, now) : null
@@ -16,7 +16,8 @@ function PoolCard({ entry, data, now, actions }: { entry: PoolEntry; data: Datas
       const { unitName, totalUnits, initialCompletedUnits, initialProgressLabel } = entry
       actions.edit({ type: 'saveTask', value: { ...shared, categoryId: entry.categoryId, unitName, totalUnits, initialCompletedUnits, initialProgressLabel } }, { existing: true })
     } else {
-      actions.edit({ type: 'saveTodo', value: { ...shared, categoryId, estimatedMinutes: entry.estimatedMinutes } }, { existing: true })
+      actions.edit({ type: 'saveTodo', value: { ...shared, categoryId, estimatedMinutes: entry.estimatedMinutes, recursWeekly: entry.recursWeekly } },
+        { existing: true, title: `编辑${ENTRY_LABEL[entry.kind]}` })
     }
   }
   return <article className="pool-card">
@@ -37,9 +38,10 @@ function PoolCard({ entry, data, now, actions }: { entry: PoolEntry; data: Datas
     </>}
     {entry.kind === 'todo' && <p className="muted">{entry.completedOn ? `${entry.completedOn} 完成` :
       entry.estimatedMinutes === null ? '待估算' : `预计 ${hoursLabel(entry.estimatedMinutes)}`}</p>}
+    {entry.kind === 'recurring' && <p className="item-detail">每周 <strong>{hoursLabel(entry.estimatedMinutes)}</strong></p>}
     {entry.note && <p className="item-note">{entry.note}</p>}
     <div className="pool-card-footer">
-      <span className="muted">{entry.archived ? '已归档' : entry.kind === 'todo' ? '临时待办' : '长期任务'}</span>
+      {(entry.archived || entry.kind !== 'recurring') && <span className="muted">{entry.archived ? '已归档' : ENTRY_LABEL[entry.kind]}</span>}
       <button disabled={actions.disabled} className="button-text" onClick={edit}>编辑</button>
     </div>
   </article>
@@ -57,7 +59,7 @@ function EditGroup({ category, project, actions }: { category?: Category; projec
 }
 
 export function PoolPage({ data, now, actions }: { data: Dataset; now: string; actions: PlannerActions }) {
-  const [filter, setFilter] = useState<'all' | 'todo' | 'task'>('all')
+  const [filter, setFilter] = useState<'all' | PoolEntry['kind']>('all')
   const [closed, setClosed] = useState(false)
   const [query, setQuery] = useState('')
   const search = query.trim().toLowerCase()
@@ -73,23 +75,31 @@ export function PoolPage({ data, now, actions }: { data: Dataset; now: string; a
     actions.edit({ type: 'saveTodo', value: newTodo(categoryId, projectId) }, { title: '新增临时待办' })
   const addItemButtons = (category: Category, project: Project | null) =>
     <div className="pool-additions">
-      {filter !== 'todo' && <AddButton disabled={actions.disabled}
+      {(filter === 'all' || filter === 'task') && <AddButton disabled={actions.disabled}
         onClick={() => actions.edit({ type: 'saveTask', value: newTask(category.id, project?.id) }, { title: '新增长期任务' })}>新增长期任务</AddButton>}
-      {filter !== 'task' && <AddButton disabled={actions.disabled}
+      {(filter === 'all' || filter === 'recurring') && <AddButton disabled={actions.disabled}
+        onClick={() => actions.edit({ type: 'saveTodo', value: newRecurringTask(category.id, project?.id) }, { title: '新增周期任务' })}>新增周期任务</AddButton>}
+      {(filter === 'all' || filter === 'todo') && <AddButton disabled={actions.disabled}
         onClick={() => addTodo(category.id, project?.id ?? null)}>新增临时待办</AddButton>}
       {project === null && <AddButton disabled={actions.disabled}
         onClick={() => actions.edit({ type: 'saveProject', value: { id: crypto.randomUUID(), categoryId: category.id, title: '', archived: false } },
           { title: '新增项目' })}>新增项目</AddButton>}
     </div>
   return <div className="stack">
+    <div>
+      <button className="button-primary" disabled={actions.disabled} onClick={() => actions.edit({ type: 'saveCategory', value: {
+        id: crypto.randomUUID(), name: '', color: '#087b68', archived: false,
+      } }, { title: '新增分类' })}>新增分类</button>
+    </div>
     <div className="filter-row">
       <div className="segmented" aria-label="任务类型">
-        {(['all', 'todo', 'task'] as const).map((id, i) => <button key={id} aria-pressed={filter === id} onClick={() => setFilter(id)}>{['全部', '临时待办', '长期任务'][i]}</button>)}
+        {(['all', 'task', 'recurring', 'todo'] as const).map(id =>
+          <button key={id} aria-pressed={filter === id} onClick={() => setFilter(id)}>{id === 'all' ? '全部' : ENTRY_LABEL[id]}</button>)}
       </div>
       <input type="search" aria-label="搜索任务" placeholder="搜索任务或分类" value={query} onChange={e => setQuery(e.target.value)} />
       <label className="check"><input type="checkbox" checked={closed} onChange={e => setClosed(e.target.checked)} />显示完成与归档</label>
     </div>
-    {filter !== 'task' && (!search || inbox.length > 0) && <section className="panel stack" aria-labelledby="pool-inbox">
+    {(filter === 'all' || filter === 'todo') && (!search || inbox.length > 0) && <section className="panel stack" aria-labelledby="pool-inbox">
       <div className="section-heading"><h2 id="pool-inbox">收件箱</h2></div>
       {cards(inbox)}
       <div className="pool-additions"><AddButton disabled={actions.disabled} onClick={() => addTodo(null, null)}>新增临时待办</AddButton></div>
@@ -107,8 +117,5 @@ export function PoolPage({ data, now, actions }: { data: Dataset; now: string; a
         </section>)}
     </section>)}
     {search && entries.length === 0 && <Empty>没有匹配的任务。</Empty>}
-    {!search && <AddButton disabled={actions.disabled} onClick={() => actions.edit({ type: 'saveCategory', value: {
-      id: crypto.randomUUID(), name: '', color: '#087b68', archived: false,
-    } }, { title: '新增分类' })}>新增分类</AddButton>}
   </div>
 }

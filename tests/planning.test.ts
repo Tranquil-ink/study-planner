@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { datasetSchema, type Dataset, type WorkLog } from '../src/domain/model'
-import { averageGoalRates, capacityFor, daySummary, emptyCapacity, weekCandidates, weekSummary } from '../src/domain/planning'
-import { audit, fixtureData, goal, schedule, scheduled, task, todo } from './fixtures'
+import { averageGoalRates, capacityFor, daySummary, emptyCapacity, progressBeforeWeek, weekCandidates, weekSummary, weekTargetDelta } from '../src/domain/planning'
+import { audit, fixtureData, goal, recurring, savedGoal, schedule, scheduled, task, todo } from './fixtures'
 
 function planned(): Dataset {
   const data = fixtureData()
   data.weeks = [{ weekStart: goal.weekStart, capacity: [[30, 30, 0], [60, 60, 0], [60, 0, 0],
     [60, 30, 30], [60, 0, 0], [0, 0, 0], [0, 0, 0]], committedAt: audit.createdAt }]
-  data.weekItems = [{ ...goal, ...audit, status: 'active', baseline: { minutes: 240, targetUnits: '30' } }]
+  data.weekItems = [{ ...savedGoal, baseline: { minutes: 240, targetUnits: '30' } }]
   return data
 }
 const log = (patch: Partial<WorkLog> = {}): WorkLog => ({
@@ -24,7 +24,7 @@ describe('本周预算、累计进度和日程完成口径', () => {
     data.workLogs = [log({ scheduleBlockId: schedule.id, actualMinutes: 170 })]
     const summary = weekSummary(data, goal.weekStart, '2026-10-22')
     expect(summary.items[0]).toMatchObject({ budget: 80, actualUnits: '6', progress: { current: '14', target: '38', ratio: 0.2 } })
-    expect(summary).toMatchObject({ scheduledMinutes: 160, actualMinutes: 170 })
+    expect(summary).toMatchObject({ scheduledMinutes: 160, actualMinutes: 170, remainingCapacity: 260 })
     data.schedules[1].date = '2026-10-26'
     expect(weekSummary(data, goal.weekStart, '2026-10-22').items[0].budget).toBe(140)
   })
@@ -35,7 +35,7 @@ describe('本周预算、累计进度和日程完成口径', () => {
     const first = weekSummary(data, goal.weekStart, '2026-10-30')
     expect(first.items[0]).toMatchObject({ progress: { current: '33', target: '48', ratio: 0.5 } })
     data.weeks.push({ weekStart: '2026-10-26', capacity: null, committedAt: null })
-    data.weekItems.push({ ...goal, id: randomUUID(), weekStart: '2026-10-26', targetUnits: '8', ...audit, status: 'active', baseline: null })
+    data.weekItems.push({ ...savedGoal, id: randomUUID(), weekStart: '2026-10-26', targetUnits: '8' })
     const second = weekSummary(data, '2026-10-26', '2026-10-30')
     expect(second.items[0].progress).toEqual({ current: '35', target: '41', unit: '页', ratio: 0.25 })
     expect(averageGoalRates([first, second])[0]).toMatchObject({ count: 2, ratio: 0.375 })
@@ -51,18 +51,20 @@ describe('本周预算、累计进度和日程完成口径', () => {
   it('激活跨周持续，临时待办按距离该周周一不足两周自动出现，完成后退出候选', () => {
     const data = fixtureData()
     data.tasks[0].activated = true
-    data.todos[0].dueDate = '2026-11-01'
-    const borderTodo = { ...data.todos[0], dueDate: '2026-11-02', id: randomUUID() }
+    const [initialTodo] = data.todos
+    if (initialTodo.recursWeekly) throw new Error('需要临时待办')
+    initialTodo.dueDate = '2026-11-01'
+    const borderTodo = { ...initialTodo, dueDate: '2026-11-02', id: randomUUID() }
     data.todos.push(borderTodo)
     expect(weekCandidates(data, '2026-10-19', '2026-10-21').map(e => e.id)).toEqual([todo.id, task.id])
-    data.todos[0].completedOn = '2026-10-22'
+    initialTodo.completedOn = '2026-10-22'
     expect(weekCandidates(data, '2026-10-26', '2026-10-27').map(e => e.id)).toEqual([borderTodo.id, task.id])
     expect(weekCandidates(data, '2026-10-19', '2026-10-27')).toEqual([])
   })
   it('保留原目标与调整后目标、补记按发生周、周中新增与计划外投入分开', () => {
     const data = planned()
     data.weekItems[0].targetUnits = '10'
-    data.weekItems.push({ ...goal, ...audit, id: randomUUID(), taskId: null, todoId: todo.id, targetUnits: null, minutes: 80, status: 'active', baseline: null })
+    data.weekItems.push({ ...savedGoal, id: randomUUID(), taskId: null, todoId: todo.id, targetUnits: null, minutes: 80 })
     data.workLogs = [log({ progressDelta: '10' }), log({ createdOrder: 2, date: '2026-10-26' }),
       log({ createdOrder: 3, taskId: null, progressDelta: null, actualMinutes: 25 })]
     const summary = weekSummary(data, goal.weekStart, '2026-10-30')
@@ -87,6 +89,27 @@ describe('本周预算、累计进度和日程完成口径', () => {
     expect(datasetSchema.safeParse(data).success).toBe(false)
     data.schedules[1].position = 1
     data.weekItems.push({ ...data.weekItems[0], id: randomUUID() })
+    expect(datasetSchema.safeParse(data).success).toBe(false)
+  })
+  it('目标页码减周初累计量得到精确增量，周中实际不会让目标变小', () => {
+    const data = planned()
+    data.workLogs = [log({ date: '2026-10-18', progressDelta: '0.2' }), log({ createdOrder: 2, progressDelta: '3' })]
+    const starting = progressBeforeWeek(data.tasks[0], data.workLogs, goal.weekStart)
+    expect(weekTargetDelta('13.75', starting)).toEqual({ delta: '5.55' })
+    expect(weekTargetDelta('8.2', starting).error).toMatch('须大于周初')
+    expect(weekTargetDelta('', starting)).toEqual({ delta: null })
+  })
+  it('已激活周期任务用预设时长进入目标，下一周有独立的完成状态', () => {
+    const data = planned()
+    data.todos.push({ ...recurring, ...audit, completedOn: null, activated: true, recurringNextWeek: '2026-10-26' })
+    const row = { ...savedGoal, id: randomUUID(), taskId: null, todoId: recurring.id, minutes: 45, targetUnits: null, recurringCompletedOn: '2026-10-20' }
+    data.weekItems.push(row)
+    expect(datasetSchema.safeParse(data).success).toBe(true)
+    expect(weekSummary(data, goal.weekStart, '2026-10-21').items.at(-1)).toMatchObject({ current: { reached: true }, progress: null })
+    expect(weekSummary(data, '2026-10-26', '2026-10-21').items).toMatchObject([
+      { projected: true, item: { todoId: recurring.id, minutes: 45 }, current: { reached: false }, progress: null },
+    ])
+    row.recurringCompletedOn = '2026-10-26'
     expect(datasetSchema.safeParse(data).success).toBe(false)
   })
 })

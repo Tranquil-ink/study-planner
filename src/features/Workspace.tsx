@@ -4,7 +4,7 @@ import type { Repository } from '../data/repository'
 import { SnapshotGuard } from '../data/session-store'
 import { today } from '../domain/calendar'
 import { subjectKey, validateCommand, type Command, type Operation, type Snapshot } from '../domain/model'
-import { entrySubject } from '../domain/planning'
+import { entrySubject, progressBeforeWeek, selectedEntry, weekTargetDelta } from '../domain/planning'
 import type { Page } from '../navigation'
 import { editWeekItem, type PlannerActions } from './planner/actions'
 import { CalendarPage, DayPage } from './planner/DaysPage'
@@ -143,8 +143,8 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
         return
       }
       edit({ type: 'saveWeekItem', value: { id: crypto.randomUUID(), weekStart: week, ...subject,
-        minutes: entry?.kind === 'todo' ? entry.estimatedMinutes ?? 0 : 0, targetUnits: null } },
-      { title: '设定目标', lockedSubject: !!entry })
+        minutes: entry && entry.kind !== 'task' ? entry.estimatedMinutes ?? 0 : 0, targetUnits: null } },
+      { title: entry?.kind === 'recurring' && entry.activated ? '编辑目标' : '设定目标', lockedSubject: !!entry })
     },
     schedule(date, period) {
       edit({ type: 'saveSchedule', value: { id: crypto.randomUUID(), date, period, taskId: null, todoId: null,
@@ -167,6 +167,32 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
     },
   }
   const retry = pending && !busy && <button type="button" onClick={() => { void submit(pending, true) }}>确认并重试原请求</button>
+  const saveEditor = () => {
+    if (!editor || !snapshot) return
+    const command = editor.command
+    if (command.type === 'saveWeekItem' && editor.targetPosition !== undefined) {
+      const entry = selectedEntry(snapshot, command.value)
+      if (entry?.kind === 'task') {
+        const result = weekTargetDelta(editor.targetPosition, progressBeforeWeek(entry, snapshot.workLogs, command.value.weekStart))
+        if (result.error) { setError(result.error); return }
+        start({ ...command, value: { ...command.value, targetUnits: result.delta } }, editor.base)
+        return
+      }
+    }
+    start(command, editor.base)
+  }
+  const rebaseEditor = () => {
+    if (!editor || !snapshot) return
+    let command = editor.command
+    if (command.type === 'saveWeekItem') {
+      const value = command.value
+      const stored = snapshot.weekItems.find(item => item.weekStart === value.weekStart && subjectKey(item) === subjectKey(value))
+      if (stored) command = { ...command, value: { ...value, id: stored.id } }
+    }
+    setEditor({ ...editor, command, base: snapshot.revision })
+    setError('')
+    setStatus('')
+  }
   const cancelEditor = () => {
     if (!busy && !pending && (!editor?.dirty || window.confirm('放弃这个表单的输入？'))) { setEditor(null); setError(''); setStatus('') }
   }
@@ -208,8 +234,7 @@ export function Workspace({ repository, page, authorized, expire, logout, login,
       {page.id === 'settings' && <BackupPanel repository={repository} snapshot={snapshot} disabled={actions.disabled} refresh={refresh}
         restore={(backup, base) => start({ type: 'restore', value: backup.data }, base)} onError={handleError} />}
       {editor && <PlannerEditor editor={editor} data={snapshot} now={now} disabled={disabled} error={error} status={status} retry={retry}
-        onChange={setEditor} onSubmit={() => start(editor.command, editor.base)} onCancel={cancelEditor}
-        onRebase={() => { setEditor({ ...editor, base: snapshot.revision }); setError(''); setStatus('') }} onRemove={removeEditor} />}
+        onChange={setEditor} onSubmit={saveEditor} onCancel={cancelEditor} onRebase={rebaseEditor} onRemove={removeEditor} />}
     </> : !loading && <section className="panel stack"><p>尚未获取云端数据。</p><button onClick={() => { void refresh() }}>重新获取</button></section>}
   </>
 }

@@ -1,5 +1,17 @@
 # 阶段 5 检查记录
 
+## v0.5.2 周期任务（2026-11-27，Asia/Shanghai）
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run lint` | 通过。 |
+| `npm run build` | 通过，含 TypeScript 检查。Vite 仍报告 Zod 注释与主包体积警告。 |
+| `npm run test -- --run` | 8 个文件、70 项通过。覆盖精确减法、剩余容量、周期完成跨周隔离、遗漏周补齐、RLS、已有数据升级和备份恢复。 |
+| `CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm run check:browser` | 通过。验证顶部分类按钮、目标页码输入、跨周周期任务、日程完成和 v7 恢复。检查 320／360／430／1280 像素。 |
+| `npm run test:integration` | 缺少隔离 Supabase 项目和空测试账号的配置，退出 2，检查未执行。 |
+
+远端迁移、部署和安卓实机待验证。 [Supabase 配置](SUPABASE.md) · [验收清单](ACCEPTANCE_STAGE5.md)
+
 ## v0.5.1 日程看板（2026-11-26，Asia/Shanghai）
 
 本地使用 Node.js 24.19.0、npm 11.9.0 和系统 Chromium。用虚构数据测试。

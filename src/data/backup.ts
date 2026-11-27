@@ -1,13 +1,14 @@
 import { z } from 'zod'
-import { businessData, datasetSchema, revisionSchema, v5DatasetSchema, type Snapshot } from '../domain/model'
+import { businessData, datasetSchema, revisionSchema, v5DatasetSchema, v6DatasetSchema, type Snapshot } from '../domain/model'
 
-export const APP_VERSION = '0.5.1'
+export const APP_VERSION = '0.5.2'
 const backupFields = {
   format: z.literal('study-planner'), appVersion: z.string().min(1).max(40),
   exportedAt: z.iso.datetime({ offset: true }), sourceRevision: revisionSchema.optional(),
 }
-export const backupSchema = z.strictObject({ ...backupFields, schemaVersion: z.literal(6), data: datasetSchema })
+export const backupSchema = z.strictObject({ ...backupFields, schemaVersion: z.literal(7), data: datasetSchema })
 const v5BackupSchema = z.strictObject({ ...backupFields, schemaVersion: z.literal(5), data: v5DatasetSchema })
+const v6BackupSchema = z.strictObject({ ...backupFields, schemaVersion: z.literal(6), data: v6DatasetSchema })
 export type Backup = z.infer<typeof backupSchema>
 
 function upgradeV5(backup: z.infer<typeof v5BackupSchema>) {
@@ -18,11 +19,12 @@ function upgradeV5(backup: z.infer<typeof v5BackupSchema>) {
   const schedules = [...data.schedules].sort((a, b) =>
     Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))
   return {
-    ...backup, schemaVersion: 6,
+    ...backup, schemaVersion: 7,
     data: {
       ...data,
       tasks: data.tasks.map(row => ({ ...row, activated: false })),
-      todos: data.todos.map(row => ({ ...row, activated: false })),
+      todos: data.todos.map(row => ({ ...row, activated: false, recursWeekly: false, recurringNextWeek: null })),
+      weekItems: data.weekItems.map(row => ({ ...row, recurringCompletedOn: null })),
       weeks: data.weeks.map(row => ({ ...row, capacity: capacity(row.capacity) })),
       schedules: schedules.map(({ resolved, ...row }) => {
         const position = positions.get(row.date) ?? 0
@@ -43,8 +45,17 @@ export function parseBackup(contents: string): Backup {
       const legacy = v5BackupSchema.safeParse(raw)
       if (!legacy.success) throw new Error(`v5 备份校验失败。 ${legacy.error.issues[0]?.message ?? ''}`)
       raw = upgradeV5(legacy.data)
-    } else if (raw.schemaVersion !== 6) {
-      throw new Error('此版本仅恢复 v5 或 v6 备份。')
+    } else if (raw.schemaVersion === 6) {
+      const legacy = v6BackupSchema.safeParse(raw)
+      if (!legacy.success) throw new Error(`v6 备份校验失败。 ${legacy.error.issues[0]?.message ?? ''}`)
+      const { data } = legacy.data
+      raw = { ...legacy.data, schemaVersion: 7, data: {
+        ...data,
+        todos: data.todos.map(row => ({ ...row, recursWeekly: false, recurringNextWeek: null })),
+        weekItems: data.weekItems.map(row => ({ ...row, recurringCompletedOn: null })),
+      } }
+    } else if (raw.schemaVersion !== 7) {
+      throw new Error('此版本仅恢复 v5、v6 或 v7 备份。')
     }
   }
   const result = backupSchema.safeParse(raw)
@@ -53,6 +64,6 @@ export function parseBackup(contents: string): Backup {
 }
 
 export function createBackup(snapshot: Snapshot): Backup {
-  return backupSchema.parse({ format: 'study-planner', schemaVersion: 6, appVersion: APP_VERSION,
+  return backupSchema.parse({ format: 'study-planner', schemaVersion: 7, appVersion: APP_VERSION,
     exportedAt: new Date().toISOString(), sourceRevision: snapshot.revision, data: businessData(snapshot) })
 }

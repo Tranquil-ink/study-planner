@@ -45,7 +45,7 @@ async function signIn(c: SupabaseClient, suffix: 'A' | 'B') {
 async function snapshot(c: SupabaseClient): Promise<Snapshot> {
   const result = await c.rpc('planner_snapshot')
   assert.equal(result.error, null, '读取 RPC 失败')
-  assert.ok(result.data && dataKeys.every(k => Array.isArray(result.data[k])), '测试库尚未升级到日程看板结构')
+  assert.ok(result.data && dataKeys.every(k => Array.isArray(result.data[k])), '测试库尚未升级到当前规划结构')
   return result.data as Snapshot
 }
 function business(s: Snapshot): Dataset {
@@ -145,14 +145,33 @@ try {
   assert.ok((await write(other, initialB.revision, { type: 'saveWeekItem', value: goal })).error, 'B 不得引用 A 的任务')
   console.log('通过：真实项目的匿名拒绝、账号隔离、表直写限制和跨账号引用限制。')
 
-  const data = business(after)
-  const invalid = await write(phone, after.revision, { type: 'restore', value: { ...data, weeks: [] } })
+  const recurring = { ...todo, id: randomUUID(), title: '虚构每周整理', categoryId: category.id,
+    dueDate: null, estimatedMinutes: 45, recursWeekly: true }
+  await save(phone, { type: 'saveTodo', value: recurring })
+  await save(phone, { type: 'setSubjectActivated', value: { id: recurring.id, kind: 'recurring', activated: true } })
+  const autoGoal = (await snapshot(computer)).weekItems.find(row => row.todoId === recurring.id)
+  assert.equal(autoGoal?.minutes, 45)
+  assert.equal(autoGoal?.recurringCompletedOn, null)
+  const recurringSchedule = { ...todoSchedule, id: randomUUID(), todoId: recurring.id, title: recurring.title, plannedMinutes: 45 }
+  await save(computer, { type: 'saveSchedule', value: recurringSchedule })
+  await save(phone, { type: 'completeSchedule', value: { id: recurringSchedule.id, logId: randomUUID(),
+    date: now, actualMinutes: 40, reachedUnits: null, progressLabel: '', note: '' } })
+  const withRecurrence = await snapshot(computer)
+  assert.equal(withRecurrence.weekItems.find(row => row.todoId === recurring.id)?.recurringCompletedOn, now)
+  assert.equal(withRecurrence.todos.find(row => row.id === recurring.id)?.completedOn, null)
+  assert.ok((await write(other, initialB.revision, { type: 'setSubjectActivated',
+    value: { id: recurring.id, kind: 'recurring', activated: false } })).error)
+  console.log('通过：周期任务自动纳入周目标、跨设备完成和跨账号隔离。')
+
+  const data = business(withRecurrence)
+  const invalid = await write(phone, withRecurrence.revision, { type: 'restore', value: { ...data, weeks: [] } })
   assert.ok(invalid.error)
-  assert.deepEqual(await snapshot(computer), after, '失败的引用校验必须回滚')
+  assert.deepEqual(await snapshot(computer), withRecurrence, '失败的引用校验必须回滚')
   await save(phone, { type: 'restore', value: data })
   const restored = await snapshot(computer)
   assert.deepEqual(restored.weeks, data.weeks)
-  assert.deepEqual(restored.weekItems[0].baseline, data.weekItems[0].baseline)
+  assert.deepEqual(restored.weekItems.find(row => row.id === goal.id)?.baseline, data.weekItems.find(row => row.id === goal.id)?.baseline)
+  assert.equal(restored.weekItems.find(row => row.todoId === recurring.id)?.recurringCompletedOn, now)
   assert.equal(restored.workLogs[0].createdOrder, data.workLogs[0].createdOrder)
   console.log('通过：完整恢复的回滚、周计划基线、实际记录和顺序。')
 } finally {

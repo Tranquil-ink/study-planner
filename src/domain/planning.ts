@@ -1,6 +1,6 @@
 import { shiftDate, sumMinutes, weekDates, weekStart, weekdayIndex } from './calendar'
 import {
-  PERIODS, quantityTicks, subjectKey, type Capacity, type Dataset, type LearningTask,
+  PERIODS, quantitySchema, quantityTicks, subjectKey, type Capacity, type Dataset, type LearningTask,
   type Subject, type Todo, type WeekItem, type WorkLog,
 } from './model'
 import { sumProgress, taskProgress, ticksQuantity } from './work-logs'
@@ -8,19 +8,27 @@ import { sumProgress, taskProgress, ticksQuantity } from './work-logs'
 export const PRIORITY_LABEL = { normal: '普通', important: '重要', urgent: '紧急' }
 export const WEEK_STATUS = { active: '本周计划', returned: '已退回待办', cancelled: '已取消', carried: '已结转下周' }
 export const PERIOD_LABEL = { morning: '上午', afternoon: '下午', evening: '晚上' }
+export const ENTRY_LABEL = { task: '长期任务', recurring: '周期任务', todo: '临时待办' }
 
-export type PoolEntry = (LearningTask & { kind: 'task' }) | (Todo & { kind: 'todo' })
+export type PoolEntry = (LearningTask & { kind: 'task' })
+  | (Extract<Todo, { recursWeekly: true }> & { kind: 'recurring' })
+  | (Extract<Todo, { recursWeekly: false }> & { kind: 'todo' })
+
+function checkableEntry(todo: Todo): PoolEntry {
+  if (todo.recursWeekly) return { ...todo, kind: 'recurring' }
+  return { ...todo, kind: 'todo' }
+}
 
 export function poolEntries(data: Dataset): PoolEntry[] {
-  return [...data.tasks.map(t => ({ ...t, kind: 'task' as const })), ...data.todos.map(t => ({ ...t, kind: 'todo' as const }))]
+  return [...data.tasks.map(t => ({ ...t, kind: 'task' as const })), ...data.todos.map(checkableEntry)]
 }
 
 export function entrySubject(entry: PoolEntry): Subject {
-  return { taskId: entry.kind === 'task' ? entry.id : null, todoId: entry.kind === 'todo' ? entry.id : null }
+  return entry.kind === 'task' ? { taskId: entry.id, todoId: null } : { taskId: null, todoId: entry.id }
 }
 
 export function isOpen(entry: PoolEntry): boolean {
-  return !entry.archived && (entry.kind === 'task' || !entry.completedOn)
+  return !entry.archived && (entry.kind !== 'todo' || !entry.completedOn)
 }
 
 export function isPlannable(entry: PoolEntry, data: Dataset): boolean {
@@ -34,7 +42,7 @@ export function selectedEntry(data: Dataset, row: Subject): PoolEntry | undefine
   const task = row.taskId && data.tasks.find(t => t.id === row.taskId)
   if (task) return { ...task, kind: 'task' }
   const todo = row.todoId && data.todos.find(t => t.id === row.todoId)
-  if (todo) return { ...todo, kind: 'todo' }
+  if (todo) return checkableEntry(todo)
 }
 
 export function sortPool(entries: PoolEntry[], now: string, dueThrough = now) {
@@ -55,7 +63,7 @@ export function weekCandidates(data: Dataset, week: string, now: string) {
   if (week < weekStart(now)) return []
   const planned = new Set(data.weekItems.filter(item => item.weekStart === week &&
     (item.status === 'active' || item.status === 'carried')).map(subjectKey))
-  return sortPool(poolEntries(data).filter(entry => isPlannable(entry, data) &&
+  return sortPool(poolEntries(data).filter(entry => entry.kind !== 'recurring' && isPlannable(entry, data) &&
     !planned.has(subjectKey(entrySubject(entry))) &&
     (entry.activated || dueWithinTwoWeeks(entry, week))), now, shiftDate(week, 13) ?? '9999-12-31')
 }
@@ -86,12 +94,34 @@ export function progressBeforeWeek(task: LearningTask, logs: WorkLog[], week: st
   return quantityTicks(task.initialCompletedUnits) + sumProgress(logs.filter(log => log.taskId === task.id && log.date < week))
 }
 
-function compareGoal(goal: Pick<WeekItem, 'minutes' | 'targetUnits'>, entry: PoolEntry | undefined, through: string,
-  actualMinutes: number, actualUnits: bigint) {
-  if (entry?.kind === 'todo') {
-    const completed = Boolean(entry.completedOn && entry.completedOn <= through)
-    return { reached: completed, percent: completed ? 100 : 0 }
+export function weekTargetDelta(position: string, starting: bigint): { delta: string | null; error?: string } {
+  if (!position.trim()) return { delta: null }
+  const parsed = quantitySchema.safeParse(position.trim())
+  if (!parsed.success) return { delta: null, error: '请填写有效的预期位置，最多 9 位整数、6 位小数。' }
+  const delta = quantityTicks(parsed.data) - starting
+  if (delta <= 0n) return { delta: null, error: '预期位置须大于周初进度，或留空只设时长。' }
+  return { delta: ticksQuantity(delta) }
+}
+
+export function weekGoalItems(data: Dataset, week: string, now: string): { item: WeekItem; projected: boolean }[] {
+  const stored = data.weekItems.filter(item => item.weekStart === week)
+  const result = stored.map(item => ({ item, projected: false }))
+  if (week < weekStart(now)) return result
+  const planned = new Set(stored.map(item => item.todoId))
+  for (const entry of poolEntries(data)) {
+    if (entry.kind !== 'recurring' || !entry.activated || planned.has(entry.id) || !isPlannable(entry, data)) continue
+    result.push({ projected: true, item: {
+      id: entry.id, weekStart: week, taskId: null, todoId: entry.id, minutes: entry.estimatedMinutes,
+      targetUnits: null, status: 'active', baseline: null, recurringCompletedOn: null,
+      createdAt: entry.createdAt, updatedAt: entry.updatedAt,
+    } })
   }
+  return result
+}
+
+function compareGoal(goal: Pick<WeekItem, 'minutes' | 'targetUnits'>, completed: boolean | null,
+  actualMinutes: number, actualUnits: bigint) {
+  if (completed !== null) return { reached: completed, percent: completed ? 100 : 0 }
   if (goal.targetUnits !== null) {
     const target = quantityTicks(goal.targetUnits)
     return { reached: actualUnits >= target, percent: Math.round(Number(actualUnits) * 100 / Number(target)) }
@@ -105,17 +135,19 @@ export function weekSummary(data: Dataset, date: string, now: string) {
   const schedules = data.schedules.filter(s => s.date >= week && s.date <= end)
   const logs = data.workLogs.filter(l => l.date >= week && l.date <= through)
   const cap = capacityFor(data, week, now)
-  const rows = data.weekItems.filter(i => i.weekStart === week)
-  const active = new Set(rows.filter(i => i.status === 'active').map(subjectKey))
+  const rows = weekGoalItems(data, week, now)
+  const active = new Set(rows.filter(r => r.item.status === 'active').map(r => subjectKey(r.item)))
   const plannedActualMinutes = sumMinutes(logs.filter(l => active.has(subjectKey(l))), l => l.actualMinutes)
   const actualMinutes = sumMinutes(logs, l => l.actualMinutes)
   const saved = data.weeks.find(w => w.weekStart === week)
-  const items = rows.map(item => {
+  const items = rows.map(({ item, projected }) => {
     const key = subjectKey(item), entry = selectedEntry(data, item)
     const itemLogs = logs.filter(l => subjectKey(l) === key)
     const minutes = sumMinutes(itemLogs, l => l.actualMinutes), units = sumProgress(itemLogs)
-    const current = compareGoal(item, entry, through, minutes, units)
-    const original = item.baseline && compareGoal(item.baseline, entry, through, minutes, units)
+    const completedOn = entry?.kind === 'recurring' ? item.recurringCompletedOn : entry?.kind === 'todo' ? entry.completedOn : undefined
+    const completed = completedOn === undefined ? null : Boolean(completedOn && completedOn <= through)
+    const current = compareGoal(item, completed, minutes, units)
+    const original = item.baseline && compareGoal(item.baseline, completed, minutes, units)
     const plannedMinutes = sumMinutes(schedules.filter(s => subjectKey(s) === key), s => s.plannedMinutes)
     const budget = item.minutes - plannedMinutes
     let progress = null
@@ -125,15 +157,17 @@ export function weekSummary(data: Dataset, date: string, now: string) {
       progress = { current: ticksQuantity(starting + units), target: ticksQuantity(starting + target), unit: entry.unitName,
         ratio: Number(units) / Number(target) }
     }
-    return { item, entry, actualMinutes: minutes, actualUnits: ticksQuantity(units),
+    return { item, entry, projected, actualMinutes: minutes, actualUnits: ticksQuantity(units),
       plannedMinutes, budget, progress, current, original }
   })
   const original = items.filter(r => r.original)
   const current = items.filter(r => r.item.status === 'active')
+  const capacity = cap === null ? null : sumMinutes(cap, day => sumMinutes(day, n => n))
+  const scheduledMinutes = sumMinutes(schedules, s => s.plannedMinutes)
   return {
     week, end, through, committedAt: saved?.committedAt ?? null, days: days.map(d => daySummary(data, d, now)), items,
-    capacity: cap === null ? null : sumMinutes(cap, day => sumMinutes(day, n => n)),
-    plannedMinutes: sumMinutes(current, r => r.item.minutes), scheduledMinutes: sumMinutes(schedules, s => s.plannedMinutes),
+    capacity, scheduledMinutes, remainingCapacity: capacity === null ? null : Math.max(0, capacity - scheduledMinutes),
+    plannedMinutes: sumMinutes(current, r => r.item.minutes),
     actualMinutes, unplannedActualMinutes: actualMinutes - plannedActualMinutes,
     initialPlannedMinutes: original.length ? sumMinutes(original, r => r.item.baseline!.minutes) : null,
     initialReached: original.filter(r => r.original?.reached).length, initialCount: original.length,

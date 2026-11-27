@@ -33,3 +33,7 @@ export function newTodo(categoryId: string | null = null, projectId: string | nu
   return { id: crypto.randomUUID(), categoryId, projectId, title: '', priority: 'normal', dueDate: null, estimatedMinutes: null,
     note: '', archived: false }
 }
+
+export function newRecurringTask(categoryId: string, projectId: string | null = null): TodoInput {
+  return { ...newTodo(categoryId, projectId), recursWeekly: true }
+}
