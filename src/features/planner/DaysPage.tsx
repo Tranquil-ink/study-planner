@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react'
 import { dateLabel, hoursLabel, minutesLabel, monthDay, sumMinutes, WEEKDAYS, weekdayIndex } from '../../domain/calendar'
 import { displayQuantity, PERIODS, subjectKey, type Dataset, type ScheduleBlock, type SchedulePeriod, type WorkLog } from '../../domain/model'
 import { daySummary, entrySubject, PERIOD_LABEL, selectedEntry, weekCandidates, weekSummary } from '../../domain/planning'
-import { AddButton, DateToolbar, Empty, EntryTag, GoalProgress, ProgressBar } from './controls'
+import { ActionMenu, AddButton, DateToolbar, Empty, EntryTag, GoalProgress, ProgressBar, type PageToolbar } from './controls'
 import { editSchedule, type PlannerActions } from './actions'
 
 const SCHEDULE_DRAG_TYPE = 'application/x-study-planner-schedule'
+const preferredDayWidth = 215
 
 interface DropLocation { date: string; period: SchedulePeriod; beforeId: string | null }
 interface BoardDrag {
@@ -62,37 +63,38 @@ function ScheduleCard({ data, row, now, actions, drag, following }: {
     draggable={Boolean(drag) && !actions.disabled} onDragStart={e => drag?.start(e, id)} onDragEnd={drag?.end}
     onDragOver={e => drag?.over(e, target)} onDrop={e => drag?.drop(e, target)}>
     <div className="schedule-top">
-      <h3><button className="schedule-title-button" disabled={actions.disabled} onClick={edit}>{title}</button></h3>
-      <span className="schedule-duration" title={logs.length ? '实际时长 / 计划时长' : '计划时长'}>
+      {pending && <button className="icon-button schedule-mark" type="button" title="标记完成" aria-label="标记完成"
+        disabled={actions.disabled} onClick={() => actions.complete(row)}><span aria-hidden="true">✓</span></button>}
+      {outcome === 'completed' && <span className="schedule-mark filled-mark">
+        <span aria-hidden="true">✓</span><span className="sr-only">已完成</span>
+      </span>}
+      {outcome === 'skipped' && <button className="icon-button schedule-mark undo-skip" type="button" title="撤销未做"
+        aria-label="撤销未做" disabled={actions.disabled}
+        onClick={() => actions.run({ type: 'setScheduleOutcome', value: { id, outcome: 'pending' } })}>
+        <span aria-hidden="true">×</span><span className="sr-only">未做</span>
+      </button>}
+      <h3><button className="schedule-title-button" type="button" disabled={actions.disabled} onClick={edit}>{title}</button></h3>
+      <span className="schedule-duration" title={logs.length
+        ? `实际 ${minutesLabel(actual)} / 计划 ${minutesLabel(row.plannedMinutes)}`
+        : `计划 ${minutesLabel(row.plannedMinutes)}`}>
         {logs.length ? `${hoursLabel(actual)} / ` : ''}{hoursLabel(row.plannedMinutes)}
       </span>
+      <ActionMenu className="quiet-actions icon-menu" label="安排操作">
+        <button type="button" disabled={actions.disabled} onClick={edit}>编辑安排</button>
+        <button type="button" disabled={actions.disabled} onClick={() => actions.edit({
+          type: 'moveSchedule', value: { id, date, period, beforeId: following ?? null },
+        })}>移动</button>
+        {pending && logs.length === 0 && <button type="button" disabled={actions.disabled}
+          onClick={() => actions.run({ type: 'setScheduleOutcome', value: { id, outcome: 'skipped' } })}>标记未做</button>}
+      </ActionMenu>
     </div>
-    <EntryTag entry={entry} data={data} now={now} />
-    {(row.plannedUnits || row.plannedRangeText) && <p className="schedule-target">
-      {row.plannedUnits && entry?.kind === 'task' ? `+${displayQuantity(row.plannedUnits)} ${entry.unitName}` : ''}
-      {row.plannedUnits && row.plannedRangeText && ' · '}{row.plannedRangeText}
-    </p>}
-    {row.note && <p className="item-note schedule-note">{row.note}</p>}
-    <div className="schedule-card-actions">
-      <div className="schedule-outcome">
-        {pending && <>
-          <button className="schedule-mark" type="button" title="标记完成" aria-label="标记完成" disabled={actions.disabled}
-            onClick={() => actions.complete(row)}>✓</button>
-          {logs.length === 0 && <button className="schedule-mark schedule-mark-skip" type="button" title="标记未做" aria-label="标记未做" disabled={actions.disabled}
-            onClick={() => actions.run({ type: 'setScheduleOutcome', value: { id, outcome: 'skipped' } })}>×</button>}
-        </>}
-        {outcome === 'completed' && <span className="schedule-result">
-          <span className="filled-mark" aria-hidden="true">✓</span><span>已完成</span>
-        </span>}
-        {outcome === 'skipped' && <button type="button" className="schedule-result undo-skip" aria-label="撤销未做" title="撤销未做"
-          disabled={actions.disabled} onClick={() => actions.run({ type: 'setScheduleOutcome', value: { id, outcome: 'pending' } })}>
-          <span className="filled-mark" aria-hidden="true">×</span>未做
-        </button>}
-      </div>
-      <button className="button-text schedule-move" type="button" disabled={actions.disabled} onClick={() => actions.edit({
-        type: 'moveSchedule', value: { id, date, period, beforeId: following ?? null },
-      })}>移动</button>
-    </div>
+    {(entry || row.plannedUnits || row.plannedRangeText) && <div className="schedule-meta">
+      {(row.plannedUnits || row.plannedRangeText) && <p className="schedule-target">
+        {row.plannedUnits && entry?.kind === 'task' && `+${displayQuantity(row.plannedUnits)} ${entry.unitName}`}
+        {row.plannedUnits && row.plannedRangeText && ' · '}{row.plannedRangeText}
+      </p>}
+      <EntryTag entry={entry} data={data} now={now} compact />
+    </div>}
   </article>
 }
 
@@ -112,11 +114,11 @@ function DayColumn({ day, data, now, actions, drag, openDay }: {
     <header className="board-day-header">
       <div className="board-day-name">
         <h2>{openDay ? <button type="button" className="board-day-link" onClick={openDay}>{heading}</button> : heading}</h2>
+        <span className="board-date">{monthDay(date)}</span>
         {date === now && <span className="board-today-tag">今天</span>}
       </div>
-      <p>{monthDay(date)}</p>
       <div className="board-day-meters">
-        <ProgressBar label="已安排时间" detail={scheduledDetail} ratio={ratio} tone={over ? 'warning' : 'warm'} />
+        <ProgressBar label="已安排时间" detail={scheduledDetail} ratio={ratio} tone={over ? 'warning' : undefined} />
         <ProgressBar label="已完成" detail={`${Math.round(completedRatio * 100)}% · ${completedCount}/${schedules.length}`}
           ratio={completedRatio} />
       </div>
@@ -131,15 +133,17 @@ function DayColumn({ day, data, now, actions, drag, openDay }: {
         onDragOver={event => drag.over(event, tail)} onDrop={event => drag.drop(event, tail)}>
         <div className="period-heading">
           <h3>{PERIOD_LABEL[period]}</h3>
-          <span className={limit !== undefined && planned > limit ? 'warning-text' : ''}>
-            {hoursLabel(planned)}{limit !== undefined && ` / ${hoursLabel(limit)}`}
-          </span>
+          <div className="period-actions">
+            {(planned > 0 || (limit ?? 0) > 0) && <span className={limit !== undefined && planned > limit ? 'warning-text' : ''}>
+              {hoursLabel(planned)}{limit !== undefined && ` / ${hoursLabel(limit)}`}
+            </span>}
+            <AddButton disabled={actions.disabled} onClick={() => actions.schedule(date, period)}
+              label={`${monthDay(date)} ${PERIOD_LABEL[period]}新增安排`} />
+          </div>
         </div>
         <div className="period-cards">
           {rows.map((row, i) => <ScheduleCard key={row.id} data={data} row={row} now={now} actions={actions} drag={drag} following={rows[i + 1]?.id} />)}
         </div>
-        <AddButton disabled={actions.disabled} onClick={() => actions.schedule(date, period)}
-          label={`${monthDay(date)} ${PERIOD_LABEL[period]}新增安排`}>新增安排</AddButton>
       </section>
     })}
   </section>
@@ -160,12 +164,17 @@ function LogCard({ log, data, actions }: { log: WorkLog; data: Dataset; actions:
     }, { existing: true, title: '编辑实际记录' })}>编辑记录</button></article>
 }
 
-function WeeklyGoals({ week, data, now }: { week: ReturnType<typeof weekSummary>; data: Dataset; now: string }) {
+function WeeklyGoals({ week, data, now, close }: {
+  week: ReturnType<typeof weekSummary>; data: Dataset; now: string; close: () => void
+}) {
   const goals = week.items.filter(row => row.item.status === 'active')
   const candidates = weekCandidates(data, week.week, now)
-  return <section className="board-goals" aria-label="日程中的本周目标">
-    <div className="board-goals-header"><h2>本周目标</h2><a href="#planning">{goals.length ? '查看本周目标' : '设定本周目标'}</a></div>
-    {(goals.length > 0 || candidates.length > 0) && <div className="board-goals-items">
+  return <section className="board-goals" id="calendar-goals" aria-label="日程中的本周目标">
+    <header className="board-goals-header">
+      <div><h2 id="calendar-goals-title">本周目标</h2><p className="muted">{monthDay(week.week)} – {monthDay(week.end)}</p></div>
+      <button type="button" className="icon-button" aria-label="关闭周目标" title="关闭周目标" onClick={close}>×</button>
+    </header>
+    {goals.length > 0 || candidates.length > 0 ? <div className="board-goals-items">
       {goals.map(row => <article key={subjectKey(row.item)} className="board-goal">
         <div className="board-goal-heading">
           <h3>{row.entry?.title}</h3>
@@ -178,72 +187,128 @@ function WeeklyGoals({ week, data, now }: { week: ReturnType<typeof weekSummary>
       {candidates.map(entry => <article key={subjectKey(entrySubject(entry))} className="board-goal">
         <div className="board-goal-heading"><h3>{entry.title}</h3><span>待设目标</span></div>
       </article>)}
-    </div>}
+    </div> : <Empty>这一周还没有目标。</Empty>}
+    <a className="goals-link" href="#planning">{goals.length ? '查看本周目标' : '设定本周目标'} <span aria-hidden="true">→</span></a>
   </section>
 }
 
-export function DayPage({ data, date, now, actions }: {
-  data: Dataset; date: string; now: string; actions: PlannerActions
+export function DayPage({ data, date, now, actions, toolbar }: {
+  data: Dataset; date: string; now: string; actions: PlannerActions; toolbar?: PageToolbar
 }) {
   const day = daySummary(data, date, now), drag = useBoardDrag(actions)
   const overdue = date === now ? data.schedules.filter(s => s.date < now && s.outcome === 'pending') : []
-  return <div className="stack">
-    <div className="day-columns">
-      <DayColumn day={day} data={data} now={now} actions={actions} drag={drag} />
-      <section className="panel stack">
-        <div className="section-heading">
-          <h2>实际记录</h2>
-          {date <= now && <button className="button-text" disabled={actions.disabled} onClick={() => actions.record(date)}>补记实际</button>}
-        </div>
-        {!day.logs.length && <Empty>{date > now ? '这一天还没有实际投入。' : '这一天还没有实际学习记录。'}</Empty>}
-        {day.logs.map(log => <LogCard key={log.id} log={log} data={data} actions={actions} />)}
-      </section>
+  return <>
+    {toolbar?.()}
+    <div className="stack">
+      <div className="day-columns">
+        <DayColumn day={day} data={data} now={now} actions={actions} drag={drag} />
+        <section className="panel stack">
+          <div className="section-heading">
+            <h2>实际记录</h2>
+            {date <= now && <button className="button-text" disabled={actions.disabled} onClick={() => actions.record(date)}>补记实际</button>}
+          </div>
+          {!day.logs.length && <Empty>{date > now ? '这一天还没有实际投入。' : '这一天还没有实际学习记录。'}</Empty>}
+          {day.logs.map(log => <LogCard key={log.id} log={log} data={data} actions={actions} />)}
+        </section>
+      </div>
+      {overdue.length > 0 && <section className="panel">
+        <details className="history-details"><summary>过去的安排待处理（{overdue.length}）</summary>
+          <div className="pool-cards">{[...overdue].reverse().map(row => <div key={row.id}>
+            <p className="muted">{dateLabel(row.date)} · {PERIOD_LABEL[row.period]}</p>
+            <ScheduleCard data={data} row={row} now={now} actions={actions} />
+          </div>)}</div>
+        </details>
+      </section>}
     </div>
-    {overdue.length > 0 && <section className="panel">
-      <details className="history-details"><summary>过去的安排待处理（{overdue.length}）</summary>
-        <div className="pool-cards">{[...overdue].reverse().map(row => <div key={row.id}>
-          <p className="muted">{dateLabel(row.date)} · {PERIOD_LABEL[row.period]}</p>
-          <ScheduleCard data={data} row={row} now={now} actions={actions} />
-        </div>)}</div>
-      </details>
-    </section>}
-  </div>
+  </>
 }
 
-function WeekBoard({ days, date, data, now, actions, openDay }: {
-  days: DayData[]; date: string; data: Dataset; now: string; actions: PlannerActions; openDay: (day: string) => void
+function WeekBoard({ days, date, data, now, actions, selectDate, openDay }: {
+  days: DayData[]; date: string; data: Dataset; now: string; actions: PlannerActions;
+  selectDate: (day: string) => void; openDay: (day: string) => void
 }) {
   const board = useRef<HTMLDivElement>(null)
+  const [columns, setColumns] = useState(1)
   const drag = useBoardDrag(actions)
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewport = board.current
-    const selected = viewport?.querySelector<HTMLElement>(`[data-board-date="${date}"]`)
-    if (!viewport || !selected) return
-    viewport.scrollLeft += selected.getBoundingClientRect().left - viewport.getBoundingClientRect().left
-  }, [date])
-  return <div ref={board} className="week-board" role="region" aria-label="按天排列的周日程" tabIndex={0}>
-    {days.map(day => <DayColumn key={day.date} day={day} data={data} now={now} actions={actions} drag={drag}
-      openDay={() => openDay(day.date)} />)}
+    if (!viewport) return
+    const observer = new ResizeObserver(([entry]) => {
+      setColumns(Math.max(1, Math.floor(entry.contentRect.width / preferredDayWidth)))
+    })
+    observer.observe(viewport)
+    return () => observer.disconnect()
+  }, [])
+  const lastStart = Math.max(0, days.length - columns)
+  const start = Math.min(lastStart, Math.max(0, days.findIndex(day => day.date === date)))
+  const shown = days.slice(start, start + columns)
+  const select = (index: number) => selectDate(days[index].date)
+  return <div className="board-view">
+    {shown.length < days.length && <div className="board-pager">
+      <button className="icon-button" type="button" aria-label="显示前几天" title="显示前几天" disabled={start === 0}
+        onClick={() => select(Math.max(0, start - columns))}>‹</button>
+      <span aria-live="polite">{monthDay(shown[0].date)}{shown.length > 1 && ` – ${monthDay(shown[shown.length - 1].date)}`}</span>
+      <button className="icon-button" type="button" aria-label="显示后几天" title="显示后几天" disabled={start === lastStart}
+        onClick={() => select(Math.min(lastStart, start + columns))}>›</button>
+    </div>}
+    <div ref={board} className="week-board" role="region" aria-label="按天排列的周日程"
+      style={{ gridTemplateColumns: `repeat(${shown.length}, minmax(0, 1fr))` }}>
+      {shown.map(day => <DayColumn key={day.date} day={day} data={data} now={now} actions={actions} drag={drag}
+        openDay={() => openDay(day.date)} />)}
+    </div>
   </div>
 }
 
-export function CalendarPage({ data, date, now, setDate, initialMode, actions }: {
-  data: Dataset; date: string; now: string; setDate: (date: string) => void; initialMode: 'week' | 'day'; actions: PlannerActions
+const dockedGoalsQuery = '(min-width: 1000px)'
+
+export function CalendarPage({ data, date, now, setDate, initialMode, actions, toolbar }: {
+  data: Dataset; date: string; now: string; setDate: (date: string) => void; initialMode: 'week' | 'day';
+  actions: PlannerActions; toolbar: PageToolbar
 }) {
   const [mode, setMode] = useState(initialMode)
+  const [goalsOpen, setGoalsOpen] = useState(false)
+  const [docked, setDocked] = useState(() => window.matchMedia(dockedGoalsQuery).matches)
+  const goalsTrigger = useRef<HTMLButtonElement>(null)
+  const goalsDialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const media = window.matchMedia(dockedGoalsQuery)
+    const update = () => setDocked(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+  useEffect(() => {
+    const element = goalsDialog.current
+    if (!goalsOpen || docked || !element) return
+    element.showModal()
+    return () => element.close()
+  }, [goalsOpen, docked])
+  const closeGoals = () => {
+    goalsDialog.current?.close()
+    setGoalsOpen(false)
+    goalsTrigger.current?.focus()
+  }
   const week = weekSummary(data, date, now)
   const inWeek = mode === 'week'
-  return <div className="stack calendar-page">
-    <div className="calendar-tools">
+  const goals = goalsOpen && <WeeklyGoals week={week} data={data} now={now} close={closeGoals} />
+  return <>
+    {toolbar(<>
       <DateToolbar date={inWeek ? week.week : date} end={inWeek ? week.end : undefined} now={now} step={inWeek ? 7 : 1} onChange={setDate} />
-      <div className="segmented" aria-label="日程视图">
-        <button aria-pressed={inWeek} onClick={() => setMode('week')}>周视图</button>
-        <button aria-pressed={!inWeek} onClick={() => setMode('day')}>日视图</button>
+      <div className="calendar-actions">
+        <div className="segmented" role="group" aria-label="日程视图">
+          <button type="button" aria-pressed={inWeek} onClick={() => setMode('week')}>周视图</button>
+          <button type="button" aria-pressed={!inWeek} onClick={() => setMode('day')}>日视图</button>
+        </div>
+        <button type="button" className="side-toggle" ref={goalsTrigger} aria-expanded={goalsOpen}
+          aria-controls={goalsOpen ? 'calendar-goals' : undefined} onClick={() => setGoalsOpen(open => !open)}>周目标</button>
       </div>
+    </>)}
+    <div className={`calendar-page ${goalsOpen && docked ? 'calendar-with-goals' : ''}`}>
+      {inWeek ? <WeekBoard days={week.days} date={date} data={data} now={now} actions={actions} selectDate={setDate}
+        openDay={day => { setDate(day); setMode('day') }} />
+        : <DayPage data={data} date={date} now={now} actions={actions} />}
+      {goals && (docked ? <aside className="goals-rail">{goals}</aside> :
+        <dialog className="planner-dialog goals-drawer" ref={goalsDialog} aria-labelledby="calendar-goals-title"
+          onCancel={event => { event.preventDefault(); closeGoals() }}>{goals}</dialog>)}
     </div>
-    <WeeklyGoals week={week} data={data} now={now} />
-    {inWeek ? <WeekBoard days={week.days} date={date} data={data} now={now} actions={actions}
-      openDay={day => { setDate(day); setMode('day') }} />
-      : <DayPage data={data} date={date} now={now} actions={actions} />}
-  </div>
+  </>
 }

@@ -1,5 +1,17 @@
 # 阶段 5 检查记录
 
+## 冷灰雾蓝界面
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run lint` | 通过。 |
+| `npm run build` | 通过，含 TypeScript 检查。Vite 仍报告 Zod 注释与主包体积警告。 |
+| `npm run test -- --run` | 8 个文件、70 项通过。 |
+| `CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm run check:browser` | 通过。覆盖键盘菜单、手机触控入口、周目标关闭后恢复焦点、桌面侧栏与跨日拖动、同周翻页、日期跳转及原有业务流程。检查 320／360／430／820／1280 像素的页面与看板宽度。 |
+| `npm run test:integration` | 缺少隔离 Supabase 项目与空测试账号配置，退出 2，检查未执行。 |
+
+浏览器检查使用虚构数据、模拟 Auth 和本地 PostgreSQL。安卓实机验收待完成。 [验收清单](ACCEPTANCE_STAGE5.md)
+
 ## v0.5.2 周期任务（2026-11-27，Asia/Shanghai）
 
 | 命令 | 结果 |

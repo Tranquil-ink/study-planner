@@ -42,25 +42,34 @@ export function BackupPanel({ repository, snapshot, disabled, refresh, restore, 
       setPreview({ backup: parsed, base: current.revision })
     } catch (e) { if (alive.current) { setError(messageOf(e)); onError(e) } } finally { if (alive.current) setBusy(false) }
   }
-  return <section className="panel stack">
-    <h2>完整备份与恢复</h2>
-    <p>备份包含分类、项目、任务、周计划、安排、实际记录和容量设置。</p>
-    <button disabled={disabled || busy} onClick={() => { void exportFile() }}>从云端导出完整 JSON</button>
-    <p>本页上次成功生成文件：{lastExport ? new Date(lastExport).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未生成'}</p>
-    <p className="muted">浏览器不能确认文件是否最终存入下载目录。此时间仅在当前页面保留。</p>
-    <label>选择 v5、v6 或 v7 备份文件<input type="file" accept=".json,application/json" disabled={disabled || busy} onChange={e => { void preflight(e.target.files?.[0]); e.target.value = '' }} /></label>
-    {busy && <p role="status">正在读取并校验…</p>}
-    {error && <p role="alert">{error}</p>}
-    {preview && <div className="notice stack">
-      <h3>备份恢复预览</h3>
-      <p>文件包含 {preview.backup.data.tasks.length} 项长期任务、{preview.backup.data.todos.filter(t => t.recursWeekly).length} 项周期任务、
-        {preview.backup.data.todos.filter(t => !t.recursWeekly).length} 项待办、{preview.backup.data.weekItems.length} 个周目标、
-        {preview.backup.data.schedules.length} 个安排和 {preview.backup.data.workLogs.length} 条实际记录。</p>
-      <p>恢复会完整替换当前账号的数据。建议先导出现有数据。</p>
-      <label className="check"><input type="checkbox" disabled={disabled} checked={checked} onChange={e => setChecked(e.target.checked)} />我确认替换当前账号全部业务数据与设置</label>
-      {preview.base !== snapshot.revision && <p role="alert">云端版本已改变，请重新选择文件并预检。</p>}
-      <button disabled={disabled || busy || !checked || preview.base !== snapshot.revision} onClick={() => restore(preview.backup, preview.base)}>确认恢复到云端</button>
-      <button disabled={disabled} onClick={() => { setPreview(null); setChecked(false) }}>取消预览</button>
-    </div>}
-  </section>
+  return <div className="stack backup-page">
+    <section className="panel stack">
+      <div className="section-heading">
+        <h2>导出备份</h2>
+        <button disabled={disabled || busy} onClick={() => { void exportFile() }}>从云端导出完整 JSON</button>
+      </div>
+      <p className="muted">备份包含分类、项目、任务、周计划、安排、实际记录和容量设置。</p>
+      {lastExport && <p className="muted" role="status">已生成备份 · {new Date(lastExport).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}。可到浏览器下载记录查看。</p>}
+    </section>
+    <section className="panel stack">
+      <h2>恢复备份</h2>
+      <label className="backup-file">选择 v5、v6 或 v7 备份文件<input type="file" accept=".json,application/json" disabled={disabled || busy} onChange={e => { void preflight(e.target.files?.[0]); e.target.value = '' }} /></label>
+      {busy && <p role="status">正在读取并校验…</p>}
+      {error && <p role="alert">{error}</p>}
+      {preview && <div className="notice stack">
+        <h3>备份恢复预览</h3>
+        <p>文件包含 {preview.backup.data.tasks.length} 项长期任务、{preview.backup.data.todos.filter(t => t.recursWeekly).length} 项周期任务、
+          {preview.backup.data.todos.filter(t => !t.recursWeekly).length} 项待办、{preview.backup.data.weekItems.length} 个周目标、
+          {preview.backup.data.schedules.length} 个安排和 {preview.backup.data.workLogs.length} 条实际记录。</p>
+        <p>恢复会完整替换当前账号的数据。建议先导出现有数据。</p>
+        <label className="check"><input type="checkbox" disabled={disabled} checked={checked} onChange={e => setChecked(e.target.checked)} />我确认替换当前账号全部业务数据与设置</label>
+        {preview.base !== snapshot.revision && <p role="alert">云端版本已改变，请重新选择文件并预检。</p>}
+        <div className="actions">
+          <button className="button-primary" disabled={disabled || busy || !checked || preview.base !== snapshot.revision}
+            onClick={() => restore(preview.backup, preview.base)}>确认恢复到云端</button>
+          <button className="button-text" disabled={disabled} onClick={() => { setPreview(null); setChecked(false) }}>取消预览</button>
+        </div>
+      </div>}
+    </section>
+  </div>
 }
